@@ -2838,8 +2838,9 @@ button {
 }
 
 .proxy-form.is-disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   pointer-events: none;
+  filter: grayscale(0.15);
 }
 .proxy-presets,
 .proxy-found {
@@ -2850,78 +2851,295 @@ button {
 }
 .proxy-found {
   margin-top: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--fill);
+  border: 1px solid var(--line);
 }
 .proxy-found-hint {
   opacity: 0.65;
   font-size: 11px;
 }
-.proxy-host-row {
-  display: grid;
-  grid-template-columns: 1fr 120px;
-  gap: 10px;
-  margin-top: 12px;
+
+/* ── Connection form card ── */
+.proxy-connect {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, var(--fill) 0%, transparent 120%);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
-.proxy-field {
+.proxy-connect-head {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.proxy-connect-title {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.proxy-proto {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.proxy-proto button {
+  padding: 9px 6px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.proxy-proto button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--fill-2);
+}
+.proxy-proto button.on {
+  color: var(--chip-on-ink);
+  background: var(--chip-on-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+.proxy-proto button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.proxy-connect-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(96px, 0.7fr);
+  gap: 12px;
+}
+.proxy-auth-grid {
+  margin-top: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.proxy-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   min-width: 0;
 }
-.proxy-field input {
+.proxy-input-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.proxy-input-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.proxy-input-box:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.proxy-input-ico {
+  flex-shrink: 0;
+  width: 1.1em;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+  opacity: 0.85;
+  user-select: none;
+}
+.proxy-input-box input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
+  border: none !important;
+  outline: none;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 10px 0 !important;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: -0.01em;
 }
-.proxy-field-port {
-  max-width: 120px;
+.proxy-input-box input::placeholder {
+  color: var(--ink-3);
+  opacity: 0.7;
+  font-weight: 400;
 }
+.proxy-input-box input:disabled {
+  opacity: 0.6;
+}
+.proxy-input-port .proxy-input-box input {
+  font-variant-numeric: tabular-nums;
+}
+
+.proxy-auth-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.86rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.proxy-auth-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--fill);
+  border-style: solid;
+}
+.proxy-auth-toggle.open {
+  color: var(--ink);
+  border-style: solid;
+  border-color: var(--line);
+  background: var(--fill);
+}
+.proxy-auth-chevron {
+  opacity: 0.7;
+  font-size: 0.75rem;
+}
+
+.proxy-mode-block {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.proxy-mode-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.proxy-mode-seg button {
+  padding: 10px 12px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 0.86rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.proxy-mode-seg button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--fill-2);
+}
+.proxy-mode-seg button.on {
+  color: var(--chip-on-ink);
+  background: var(--chip-on-bg);
+  font-weight: 600;
+}
+.proxy-mode-seg button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.proxy-preview-bar {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.proxy-preview-label {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.proxy-preview-code {
+  font-size: 0.84rem;
+  font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
 .proxy-toggle-link {
-  margin-top: 12px;
+  margin-top: 14px;
   padding: 0;
   border: none;
   background: none;
-  color: var(--ink-2, #aaa);
-  font-size: 12px;
+  color: var(--ink-2);
+  font-size: 0.84rem;
+  font-weight: 550;
   cursor: pointer;
   text-align: left;
 }
 .proxy-toggle-link:hover:not(:disabled) {
-  color: var(--ink, #eee);
+  color: var(--ink);
 }
-.proxy-preview {
-  margin: 14px 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.proxy-preview code {
-  font-size: 12px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  word-break: break-all;
-  color: var(--ink, #e8e4dc);
-}
+
 .proxy-card .chip {
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-  background: transparent;
-  color: var(--text, #eee);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
   border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 7px 13px;
+  font-size: 0.82rem;
+  font-weight: 550;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.proxy-card .chip:hover:not(:disabled) {
+  background: var(--fill-2);
 }
 .proxy-card .chip.on {
-  background: var(--accent, #f2f2f7);
-  color: #111;
+  background: var(--chip-on-bg);
+  color: var(--chip-on-ink);
   border-color: transparent;
 }
 .proxy-card .chip:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+  .proxy-connect-grid,
+  .proxy-auth-grid {
+    grid-template-columns: 1fr;
+  }
+  .proxy-proto {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .proxy-mode-seg {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-seg button:disabled {

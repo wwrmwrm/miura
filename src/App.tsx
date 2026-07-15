@@ -4232,122 +4232,151 @@ function Settings({
                   </div>
                 )}
 
-                <p className="settings-field-label" style={{ marginTop: 16 }}>
-                  {t.settings.proxyProtocol}
-                </p>
-                <div className="settings-seg">
-                  {(['socks5', 'socks4', 'http', 'https'] as ProxyScheme[]).map((sch) => (
-                    <button
-                      key={sch}
-                      type="button"
-                      className={proxyParts.scheme === sch ? 'on' : ''}
-                      disabled={!proxyEnabled}
-                      onClick={() => syncProxyFromParts({ ...proxyParts, scheme: sch })}
-                    >
-                      {sch}
-                    </button>
-                  ))}
-                </div>
+                <div className="proxy-connect">
+                  <div className="proxy-connect-head">
+                    <span className="proxy-connect-title">{t.settings.proxyProtocol}</span>
+                    <div className="proxy-proto" role="group" aria-label={t.settings.proxyProtocol}>
+                      {(['socks5', 'socks4', 'http', 'https'] as ProxyScheme[]).map((sch) => (
+                        <button
+                          key={sch}
+                          type="button"
+                          className={proxyParts.scheme === sch ? 'on' : ''}
+                          disabled={!proxyEnabled}
+                          onClick={() => syncProxyFromParts({ ...proxyParts, scheme: sch })}
+                        >
+                          {sch}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-                <div className="proxy-host-row">
-                  <label className="proxy-field">
-                    <span className="settings-field-label">{t.settings.proxyHost}</span>
-                    <input
-                      type="text"
-                      value={proxyParts.host}
-                      disabled={!proxyEnabled}
-                      spellCheck={false}
-                      placeholder="127.0.0.1"
-                      onChange={(e) =>
-                        syncProxyFromParts({ ...proxyParts, host: e.target.value })
-                      }
-                    />
-                  </label>
-                  <label className="proxy-field proxy-field-port">
-                    <span className="settings-field-label">{t.settings.proxyPort}</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={proxyParts.port}
-                      disabled={!proxyEnabled}
-                      spellCheck={false}
-                      placeholder="7890"
-                      onChange={(e) =>
-                        syncProxyFromParts({
-                          ...proxyParts,
-                          port: e.target.value.replace(/[^\d]/g, '').slice(0, 5),
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-
-                <button
-                  type="button"
-                  className="proxy-toggle-link"
-                  disabled={!proxyEnabled}
-                  onClick={() => setProxyShowAuth((v) => !v)}
-                >
-                  {t.settings.proxyAuth}
-                  {proxyShowAuth ? ' ▴' : ' ▾'}
-                </button>
-                {proxyShowAuth && (
-                  <div className="proxy-host-row">
-                    <label className="proxy-field">
-                      <span className="settings-field-label">{t.settings.proxyUser}</span>
-                      <input
-                        type="text"
-                        value={proxyParts.user}
-                        disabled={!proxyEnabled}
-                        spellCheck={false}
-                        autoComplete="off"
-                        onChange={(e) =>
-                          syncProxyFromParts({ ...proxyParts, user: e.target.value })
-                        }
-                      />
+                  <div className="proxy-connect-grid">
+                    <label className="proxy-input proxy-input-host">
+                      <span className="proxy-input-label">{t.settings.proxyHost}</span>
+                      <span className="proxy-input-box">
+                        <span className="proxy-input-ico" aria-hidden>
+                          ⌂
+                        </span>
+                        <input
+                          type="text"
+                          value={proxyParts.host}
+                          disabled={!proxyEnabled}
+                          spellCheck={false}
+                          placeholder="127.0.0.1"
+                          onChange={(e) =>
+                            syncProxyFromParts({ ...proxyParts, host: e.target.value })
+                          }
+                        />
+                      </span>
                     </label>
-                    <label className="proxy-field">
-                      <span className="settings-field-label">{t.settings.proxyPass}</span>
-                      <input
-                        type="password"
-                        value={proxyParts.pass}
-                        disabled={!proxyEnabled}
-                        spellCheck={false}
-                        autoComplete="new-password"
-                        onChange={(e) =>
-                          syncProxyFromParts({ ...proxyParts, pass: e.target.value })
-                        }
-                      />
+                    <label className="proxy-input proxy-input-port">
+                      <span className="proxy-input-label">{t.settings.proxyPort}</span>
+                      <span className="proxy-input-box">
+                        <span className="proxy-input-ico" aria-hidden>
+                          #
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={proxyParts.port}
+                          disabled={!proxyEnabled}
+                          spellCheck={false}
+                          placeholder="7890"
+                          onChange={(e) =>
+                            syncProxyFromParts({
+                              ...proxyParts,
+                              port: e.target.value.replace(/[^\d]/g, '').slice(0, 5),
+                            })
+                          }
+                        />
+                      </span>
                     </label>
                   </div>
-                )}
 
-                <p className="settings-field-label" style={{ marginTop: 14 }}>
-                  {t.settings.proxyMode}
-                </p>
-                <div className="settings-seg">
                   <button
                     type="button"
-                    className={proxyMode === 'sc' ? 'on' : ''}
-                    onClick={() => setProxyMode('sc')}
+                    className={`proxy-auth-toggle ${proxyShowAuth ? 'open' : ''}`}
                     disabled={!proxyEnabled}
+                    onClick={() => setProxyShowAuth((v) => !v)}
                   >
-                    {t.settings.proxyModeSc}
+                    <span>{t.settings.proxyAuth}</span>
+                    <span className="proxy-auth-chevron" aria-hidden>
+                      {proxyShowAuth ? '▴' : '▾'}
+                    </span>
                   </button>
-                  <button
-                    type="button"
-                    className={proxyMode === 'all' ? 'on' : ''}
-                    onClick={() => setProxyMode('all')}
-                    disabled={!proxyEnabled}
-                  >
-                    {t.settings.proxyModeAll}
-                  </button>
+
+                  {proxyShowAuth && (
+                    <div className="proxy-connect-grid proxy-auth-grid">
+                      <label className="proxy-input">
+                        <span className="proxy-input-label">{t.settings.proxyUser}</span>
+                        <span className="proxy-input-box">
+                          <span className="proxy-input-ico" aria-hidden>
+                            @
+                          </span>
+                          <input
+                            type="text"
+                            value={proxyParts.user}
+                            disabled={!proxyEnabled}
+                            spellCheck={false}
+                            autoComplete="off"
+                            placeholder="user"
+                            onChange={(e) =>
+                              syncProxyFromParts({ ...proxyParts, user: e.target.value })
+                            }
+                          />
+                        </span>
+                      </label>
+                      <label className="proxy-input">
+                        <span className="proxy-input-label">{t.settings.proxyPass}</span>
+                        <span className="proxy-input-box">
+                          <span className="proxy-input-ico" aria-hidden>
+                            •
+                          </span>
+                          <input
+                            type="password"
+                            value={proxyParts.pass}
+                            disabled={!proxyEnabled}
+                            spellCheck={false}
+                            autoComplete="new-password"
+                            placeholder="••••••••"
+                            onChange={(e) =>
+                              syncProxyFromParts({ ...proxyParts, pass: e.target.value })
+                            }
+                          />
+                        </span>
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="proxy-mode-block">
+                    <span className="proxy-input-label">{t.settings.proxyMode}</span>
+                    <div className="proxy-mode-seg">
+                      <button
+                        type="button"
+                        className={proxyMode === 'sc' ? 'on' : ''}
+                        onClick={() => setProxyMode('sc')}
+                        disabled={!proxyEnabled}
+                      >
+                        {t.settings.proxyModeSc}
+                      </button>
+                      <button
+                        type="button"
+                        className={proxyMode === 'all' ? 'on' : ''}
+                        onClick={() => setProxyMode('all')}
+                        disabled={!proxyEnabled}
+                      >
+                        {t.settings.proxyModeAll}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="proxy-preview-bar">
+                    <span className="proxy-preview-label">{t.settings.proxyPreview}</span>
+                    <code className="proxy-preview-code" title={buildProxyUrl(proxyParts)}>
+                      {buildProxyUrl(proxyParts)}
+                    </code>
+                  </div>
                 </div>
-
-                <p className="proxy-preview">
-                  <span className="settings-field-label">{t.settings.proxyPreview}</span>
-                  <code>{buildProxyUrl(proxyParts)}</code>
-                </p>
 
                 <div className="row-btns" style={{ marginTop: 14 }}>
                   <button
