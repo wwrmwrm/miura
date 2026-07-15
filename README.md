@@ -14,7 +14,7 @@ Multi-source **desktop music player** — Electron + React + TypeScript.
 | **Playlists** | Text/M3U import, resolve across sources, virtualized long lists |
 | **Player** | Shuffle bag (no repeats until full cycle), queue, mini player control surface |
 | **Discord** | Rich Presence (built-in app) |
-| **i18n** | Русский / English / Українська |
+| **i18n** | Русский, English (US), Deutsch, Español, Français, Italiano, Nederlands, Polski, Português, Svenska |
 
 ## Setup
 

@@ -53,7 +53,7 @@ import {
 } from './api/soundcloud';
 import { Modal } from './components/Modal';
 import { usePlayer } from './hooks/usePlayer';
-import { useI18n, useT, LOCALE_LABELS, type Locale } from './i18n';
+import { useI18n, useT, LOCALE_LABELS, LOCALE_ORDER, type Locale } from './i18n';
 import { TrackPage } from './pages/TrackPage';
 import { LocalPage } from './pages/LocalPage';
 import { YouTubePage } from './pages/YouTubePage';
@@ -3703,7 +3703,9 @@ function Settings({
 
   const probeLocalProxy = async () => {
     if (!window.electronAPI?.proxyProbeLocal) {
-      setProxyMsg('поиск только в electron');
+      setProxyMsg(
+        'Кнопка «Найти» недоступна: перезапусти miura (npm run dev), чтобы подтянуть Electron IPC.'
+      );
       return;
     }
     setProxyBusy(true);
@@ -3711,17 +3713,27 @@ function Settings({
     setProxyFound([]);
     try {
       const res = await window.electronAPI.proxyProbeLocal();
-      const open = res.open || [];
+      if (res && res.ok === false && res.error) {
+        setProxyMsg(String(res.error));
+        return;
+      }
+      const open = Array.isArray(res?.open) ? res.open : [];
       setProxyFound(open);
       if (!open.length) {
         setProxyMsg(t.settings.proxyFoundNone);
       } else {
-        setProxyMsg(t.settings.proxyFound.replace('{n}', String(open.length)));
-        applyProxyUrlString(open[0]!.url);
         setProxyEnabled(true);
+        applyProxyUrlString(open[0]!.url);
+        setProxyMsg(t.settings.proxyFound.replace('{n}', String(open.length)));
       }
     } catch (e) {
-      setProxyMsg(e instanceof Error ? e.message : 'probe failed');
+      const msg = e instanceof Error ? e.message : String(e);
+      // Common when Electron was started before this feature was added
+      if (/no handler|not available|invoke/i.test(msg)) {
+        setProxyMsg('Нужен перезапуск приложения (старый Electron без proxy-probe).');
+      } else {
+        setProxyMsg(msg || 'probe failed');
+      }
     } finally {
       setProxyBusy(false);
     }
@@ -3794,7 +3806,7 @@ function Settings({
                 <h2>{t.settings.language}</h2>
                 <p className="settings-desc">{t.settings.languageHint}</p>
                 <div className="settings-seg">
-                  {(Object.keys(LOCALE_LABELS) as Locale[]).map((l) => (
+                  {LOCALE_ORDER.map((l) => (
                     <button
                       key={l}
                       type="button"
@@ -4171,7 +4183,8 @@ function Settings({
                 <span>{t.settings.proxyEnable}</span>
               </label>
 
-              <div className={`proxy-form ${proxyEnabled ? '' : 'is-disabled'}`}>
+              {/* Presets + Find always clickable (even if proxy toggle is off) */}
+              <div className="proxy-quick">
                 <p className="settings-field-label">{t.settings.proxyPresets}</p>
                 <div className="proxy-presets">
                   {PROXY_PRESETS.map((pr) => {
@@ -4183,7 +4196,7 @@ function Settings({
                         key={pr.id}
                         type="button"
                         className={`chip ${active ? 'on' : ''}`}
-                        disabled={!proxyEnabled || proxyBusy}
+                        disabled={proxyBusy}
                         onClick={() => {
                           const parts: ProxyParts = {
                             scheme: pr.scheme,
@@ -4202,10 +4215,10 @@ function Settings({
                   })}
                 </div>
 
-                <div className="row-btns" style={{ marginTop: 10 }}>
+                <div className="row-btns" style={{ marginTop: 12 }}>
                   <button
                     type="button"
-                    className="btn"
+                    className="btn solid"
                     disabled={proxyBusy}
                     onClick={() => void probeLocalProxy()}
                   >
@@ -4220,6 +4233,7 @@ function Settings({
                         key={`${f.scheme}:${f.port}`}
                         type="button"
                         className="chip"
+                        disabled={proxyBusy}
                         onClick={() => {
                           applyProxyUrlString(f.url);
                           setProxyEnabled(true);
@@ -4231,7 +4245,9 @@ function Settings({
                     ))}
                   </div>
                 )}
+              </div>
 
+              <div className={`proxy-form ${proxyEnabled ? '' : 'is-disabled'}`}>
                 <div className="proxy-connect">
                   <div className="proxy-connect-head">
                     <span className="proxy-connect-title">{t.settings.proxyProtocol}</span>

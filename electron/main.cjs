@@ -350,50 +350,64 @@ function probeLocalProxyPorts() {
     { port: 1080, scheme: 'socks5', hint: 'SOCKS' },
     { port: 1081, scheme: 'socks5', hint: 'SOCKS alt' },
     { port: 2080, scheme: 'socks5', hint: 'Nekoray' },
+    { port: 20170, scheme: 'socks5', hint: 'NekoBox' },
     { port: 20171, scheme: 'socks5', hint: 'NekoBox' },
     { port: 20172, scheme: 'http', hint: 'NekoBox HTTP' },
     { port: 6152, scheme: 'socks5', hint: 'Surge' },
     { port: 6153, scheme: 'http', hint: 'Surge HTTP' },
+    { port: 9090, scheme: 'http', hint: 'Clash external' },
+    { port: 7893, scheme: 'socks5', hint: 'Clash SOCKS alt' },
   ];
-  const host = '127.0.0.1';
-  const timeoutMs = 180;
+  const hosts = ['127.0.0.1', 'localhost'];
+  const timeoutMs = 400;
+
+  function tryConnect(host, port) {
+    return new Promise((resolve) => {
+      const sock = new net.Socket();
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        try {
+          sock.destroy();
+        } catch {
+          /* ignore */
+        }
+        resolve(ok);
+      };
+      sock.setTimeout(timeoutMs);
+      sock.once('connect', () => finish(true));
+      sock.once('timeout', () => finish(false));
+      sock.once('error', () => finish(false));
+      try {
+        sock.connect({ port, host, family: 4 });
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
   return Promise.all(
-    candidates.map(
-      (c) =>
-        new Promise((resolve) => {
-          const sock = new net.Socket();
-          let done = false;
-          const finish = (open) => {
-            if (done) return;
-            done = true;
-            try {
-              sock.destroy();
-            } catch {
-              /* ignore */
-            }
-            resolve(
-              open
-                ? {
-                    port: c.port,
-                    scheme: c.scheme,
-                    hint: c.hint,
-                    url: `${c.scheme}://${host}:${c.port}`,
-                  }
-                : null
-            );
+    candidates.map(async (c) => {
+      for (const host of hosts) {
+        // eslint-disable-next-line no-await-in-loop
+        const open = await tryConnect(host, c.port);
+        if (open) {
+          return {
+            port: c.port,
+            scheme: c.scheme,
+            hint: c.hint,
+            url: `${c.scheme}://127.0.0.1:${c.port}`,
           };
-          sock.setTimeout(timeoutMs);
-          sock.once('connect', () => finish(true));
-          sock.once('timeout', () => finish(false));
-          sock.once('error', () => finish(false));
-          try {
-            sock.connect(c.port, host);
-          } catch {
-            finish(false);
-          }
-        })
-    )
-  ).then((list) => list.filter(Boolean));
+        }
+      }
+      return null;
+    })
+  ).then((list) => {
+    const open = list.filter(Boolean);
+    console.log('[proxy-probe] open ports:', open.map((x) => x.port).join(', ') || '(none)');
+    return open;
+  });
 }
 
 async function testProxyReachability() {
@@ -2946,8 +2960,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('proxy-probe-local', async () => {
     try {
       const open = await probeLocalProxyPorts();
-      return { ok: true, open };
+      return { ok: true, open: open || [] };
     } catch (e) {
+      console.error('[proxy-probe]', e);
       return { ok: false, open: [], error: e instanceof Error ? e.message : String(e) };
     }
   });

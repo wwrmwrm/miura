@@ -93,7 +93,7 @@ export const en: Dict = {
   },
   local: {
     title: 'On This Device',
-    lead: 'Your music from disk. No DRM, no network. Library, smart playlists, EQ.',
+    lead: 'Your music from disk. No DRM, no network.',
     addFiles: 'Add files',
     addFolder: 'Add folder',
     watchFolder: 'Watch folder',

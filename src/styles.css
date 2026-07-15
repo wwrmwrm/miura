@@ -2815,6 +2815,20 @@ button {
   border-radius: var(--radius-pill);
   background: var(--fill);
   border: 1px solid var(--line);
+  max-width: 100%;
+}
+
+/* Language picker — many locales need room to wrap cleanly */
+.settings-card .settings-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 14px;
+}
+.settings-card .settings-seg button {
+  padding: 8px 12px;
+  font-size: 0.84rem;
 }
 
 .settings-seg button {
@@ -2837,6 +2851,10 @@ button {
   font-weight: 600;
 }
 
+.proxy-quick {
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
 .proxy-form.is-disabled {
   opacity: 0.5;
   pointer-events: none;
