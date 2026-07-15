@@ -1,0 +1,37 @@
+{
+  "name": "miura",
+  "version": "1.0.0",
+  "private": true,
+  "description": "miura — multi-source music player (local, SoundCloud, YouTube)",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USER/soundcloud-desktop.git"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build",
+    "start": "electron .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "hls.js": "^1.5.18",
+    "music-metadata": "^11.13.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "youtubei.js": "^17.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^34.5.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  }
+}
