@@ -337,6 +337,65 @@ async function validateAndSaveToken(accessToken, clientId, fetchImpl) {
   return getStoredAuth();
 }
 
+/** Probe common local proxy ports (quick TCP connect). */
+function probeLocalProxyPorts() {
+  const net = require('net');
+  const candidates = [
+    { port: 7890, scheme: 'http', hint: 'Clash / Mihomo HTTP' },
+    { port: 7891, scheme: 'socks5', hint: 'Clash SOCKS' },
+    { port: 7897, scheme: 'http', hint: 'Clash mixed' },
+    { port: 10808, scheme: 'socks5', hint: 'v2rayN' },
+    { port: 10809, scheme: 'http', hint: 'v2rayN HTTP' },
+    { port: 12334, scheme: 'socks5', hint: 'Hiddify / custom' },
+    { port: 1080, scheme: 'socks5', hint: 'SOCKS' },
+    { port: 1081, scheme: 'socks5', hint: 'SOCKS alt' },
+    { port: 2080, scheme: 'socks5', hint: 'Nekoray' },
+    { port: 20171, scheme: 'socks5', hint: 'NekoBox' },
+    { port: 20172, scheme: 'http', hint: 'NekoBox HTTP' },
+    { port: 6152, scheme: 'socks5', hint: 'Surge' },
+    { port: 6153, scheme: 'http', hint: 'Surge HTTP' },
+  ];
+  const host = '127.0.0.1';
+  const timeoutMs = 180;
+  return Promise.all(
+    candidates.map(
+      (c) =>
+        new Promise((resolve) => {
+          const sock = new net.Socket();
+          let done = false;
+          const finish = (open) => {
+            if (done) return;
+            done = true;
+            try {
+              sock.destroy();
+            } catch {
+              /* ignore */
+            }
+            resolve(
+              open
+                ? {
+                    port: c.port,
+                    scheme: c.scheme,
+                    hint: c.hint,
+                    url: `${c.scheme}://${host}:${c.port}`,
+                  }
+                : null
+            );
+          };
+          sock.setTimeout(timeoutMs);
+          sock.once('connect', () => finish(true));
+          sock.once('timeout', () => finish(false));
+          sock.once('error', () => finish(false));
+          try {
+            sock.connect(c.port, host);
+          } catch {
+            finish(false);
+          }
+        })
+    )
+  ).then((list) => list.filter(Boolean));
+}
+
 async function testProxyReachability() {
   const url = 'https://api-v2.soundcloud.com/search/tracks?q=test&limit=1&client_id=a';
   try {
@@ -2884,6 +2943,14 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('proxy-get', () => readProxyConfig());
+  ipcMain.handle('proxy-probe-local', async () => {
+    try {
+      const open = await probeLocalProxyPorts();
+      return { ok: true, open };
+    } catch (e) {
+      return { ok: false, open: [], error: e instanceof Error ? e.message : String(e) };
+    }
+  });
   ipcMain.handle('proxy-set', async (_e, cfg) => {
     const next = writeProxyConfig(cfg || {});
     const applied = await applyProxyConfig(next);

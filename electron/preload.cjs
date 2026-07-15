@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   proxyGet: () => ipcRenderer.invoke('proxy-get'),
   proxySet: (cfg) => ipcRenderer.invoke('proxy-set', cfg),
   proxyTest: () => ipcRenderer.invoke('proxy-test'),
+  proxyProbeLocal: () => ipcRenderer.invoke('proxy-probe-local'),
   discordGet: () => ipcRenderer.invoke('discord-get'),
   discordSetConfig: (cfg) => ipcRenderer.invoke('discord-set-config', cfg),
   discordSetPresence: (payload) => ipcRenderer.invoke('discord-set-presence', payload),

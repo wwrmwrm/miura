@@ -209,6 +209,11 @@ interface Window {
       status?: number;
       message: string;
     }>;
+    proxyProbeLocal: () => Promise<{
+      ok: boolean;
+      open?: Array<{ port: number; scheme: string; hint: string; url: string }>;
+      error?: string;
+    }>;
     discordGet: () => Promise<DiscordStatus>;
     discordSetConfig: (cfg: {
       enabled?: boolean;

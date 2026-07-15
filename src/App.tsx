@@ -67,6 +67,15 @@ import { useMediaHotkeys } from './hooks/useMediaHotkeys';
 import { loadRecent, pushRecent, trackToRecent } from './lib/recent';
 import { favIdFromTrack, loadFavorites, toggleFavorite, type FavItem } from './lib/miuraFavorites';
 import {
+  buildProxyUrl,
+  emptyParts,
+  matchPresetId,
+  parseProxyUrl,
+  PROXY_PRESETS,
+  type ProxyParts,
+  type ProxyScheme,
+} from './lib/proxyUrl';
+import {
   deleteProfile,
   getProfileState,
   logoutProfile,
@@ -3592,6 +3601,14 @@ function Settings({
   const [proxyEnabled, setProxyEnabled] = useState(true);
   const [proxyMode, setProxyMode] = useState<'sc' | 'all'>('all');
   const [proxyUrl, setProxyUrl] = useState('socks5://127.0.0.1:12334');
+  const [proxyParts, setProxyParts] = useState<ProxyParts>(() =>
+    parseProxyUrl('socks5://127.0.0.1:12334')
+  );
+  const [proxyShowAuth, setProxyShowAuth] = useState(false);
+  const [proxyShowAdvanced, setProxyShowAdvanced] = useState(false);
+  const [proxyFound, setProxyFound] = useState<
+    Array<{ port: number; scheme: string; hint: string; url: string }>
+  >([]);
   const [proxyMsg, setProxyMsg] = useState<string | null>(null);
   const [proxyBusy, setProxyBusy] = useState(false);
 
@@ -3607,7 +3624,11 @@ function Settings({
         if (!cfg) return;
         setProxyEnabled(cfg.enabled);
         setProxyMode(cfg.mode === 'all' ? 'all' : 'sc');
-        setProxyUrl(cfg.url || 'socks5://127.0.0.1:12334');
+        const url = cfg.url || 'socks5://127.0.0.1:12334';
+        setProxyUrl(url);
+        const parts = parseProxyUrl(url);
+        setProxyParts(parts);
+        setProxyShowAuth(Boolean(parts.user || parts.pass));
       } catch {
         /* not electron */
       }
@@ -3633,21 +3654,42 @@ function Settings({
     })();
   }, [t.settings.discordNoPackage, t.settings.discordOnline, t.settings.discordWaiting]);
 
-  const saveProxy = async () => {
+  const syncProxyFromParts = (parts: ProxyParts) => {
+    setProxyParts(parts);
+    setProxyUrl(buildProxyUrl(parts));
+  };
+
+  const applyProxyUrlString = (url: string) => {
+    const parts = parseProxyUrl(url);
+    setProxyParts(parts);
+    setProxyUrl(buildProxyUrl(parts));
+    if (parts.user || parts.pass) setProxyShowAuth(true);
+  };
+
+  const saveProxy = async (opts?: { test?: boolean; url?: string; enabled?: boolean }) => {
     if (!window.electronAPI?.proxySet) {
       setProxyMsg('прокси только в electron-приложении');
       return;
     }
+    const url = (opts?.url ?? buildProxyUrl(proxyParts)).trim();
+    const enabled = opts?.enabled ?? proxyEnabled;
     setProxyBusy(true);
     setProxyMsg(null);
     try {
       const res = await window.electronAPI.proxySet({
-        enabled: proxyEnabled,
+        enabled,
         mode: proxyMode,
-        url: proxyUrl.trim(),
+        url,
       });
+      setProxyUrl(url);
+      setProxyParts(parseProxyUrl(url));
       const note = res.applied?.note ? ` · ${res.applied.note}` : '';
-      setProxyMsg(`saved · ${res.applied?.applied || 'ok'}${note}`);
+      if (opts?.test && enabled && window.electronAPI.proxyTest) {
+        const tr = await window.electronAPI.proxyTest();
+        setProxyMsg(tr.message || `✓ ${res.applied?.applied || 'ok'}${note}`);
+      } else {
+        setProxyMsg(`✓ ${res.applied?.applied || 'ok'}${note}`);
+      }
     } catch (e) {
       setProxyMsg(e instanceof Error ? e.message : 'proxy error');
     } finally {
@@ -3656,20 +3698,30 @@ function Settings({
   };
 
   const testProxy = async () => {
-    if (!window.electronAPI?.proxyTest) return;
+    await saveProxy({ test: true });
+  };
+
+  const probeLocalProxy = async () => {
+    if (!window.electronAPI?.proxyProbeLocal) {
+      setProxyMsg('поиск только в electron');
+      return;
+    }
     setProxyBusy(true);
     setProxyMsg(null);
+    setProxyFound([]);
     try {
-      // apply current form first
-      await window.electronAPI.proxySet({
-        enabled: proxyEnabled,
-        mode: proxyMode,
-        url: proxyUrl.trim(),
-      });
-      const res = await window.electronAPI.proxyTest();
-      setProxyMsg(res.message);
+      const res = await window.electronAPI.proxyProbeLocal();
+      const open = res.open || [];
+      setProxyFound(open);
+      if (!open.length) {
+        setProxyMsg(t.settings.proxyFoundNone);
+      } else {
+        setProxyMsg(t.settings.proxyFound.replace('{n}', String(open.length)));
+        applyProxyUrlString(open[0]!.url);
+        setProxyEnabled(true);
+      }
     } catch (e) {
-      setProxyMsg(e instanceof Error ? e.message : 'test failed');
+      setProxyMsg(e instanceof Error ? e.message : 'probe failed');
     } finally {
       setProxyBusy(false);
     }
@@ -4106,9 +4158,10 @@ function Settings({
           )}
 
           {settingsTab === 'network' && (
-            <section className="settings-card">
+            <section className="settings-card proxy-card">
               <h2>{t.settings.proxyTitle}</h2>
               <p className="settings-desc">{t.settings.proxyHint}</p>
+
               <label className="settings-check">
                 <input
                   type="checkbox"
@@ -4117,57 +4170,242 @@ function Settings({
                 />
                 <span>{t.settings.proxyEnable}</span>
               </label>
-              <label className="settings-field-label">{t.settings.proxyUrl}</label>
-              <input
-                type="text"
-                value={proxyUrl}
-                onChange={(e) => setProxyUrl(e.target.value)}
-                placeholder="socks5://127.0.0.1:12334"
-                spellCheck={false}
-                disabled={!proxyEnabled}
-              />
-              <div className="settings-seg" style={{ marginTop: 14 }}>
+
+              <div className={`proxy-form ${proxyEnabled ? '' : 'is-disabled'}`}>
+                <p className="settings-field-label">{t.settings.proxyPresets}</p>
+                <div className="proxy-presets">
+                  {PROXY_PRESETS.map((pr) => {
+                    const active = matchPresetId(proxyUrl) === pr.id;
+                    const label =
+                      (t.settings as unknown as Record<string, string>)[pr.labelKey] || pr.label;
+                    return (
+                      <button
+                        key={pr.id}
+                        type="button"
+                        className={`chip ${active ? 'on' : ''}`}
+                        disabled={!proxyEnabled || proxyBusy}
+                        onClick={() => {
+                          const parts: ProxyParts = {
+                            scheme: pr.scheme,
+                            host: pr.host,
+                            port: pr.port,
+                            user: proxyParts.user,
+                            pass: proxyParts.pass,
+                          };
+                          syncProxyFromParts(parts);
+                          setProxyEnabled(true);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="row-btns" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={proxyBusy}
+                    onClick={() => void probeLocalProxy()}
+                  >
+                    {proxyBusy ? '…' : t.settings.proxyFindLocal}
+                  </button>
+                </div>
+
+                {proxyFound.length > 0 && (
+                  <div className="proxy-found">
+                    {proxyFound.map((f) => (
+                      <button
+                        key={`${f.scheme}:${f.port}`}
+                        type="button"
+                        className="chip"
+                        onClick={() => {
+                          applyProxyUrlString(f.url);
+                          setProxyEnabled(true);
+                        }}
+                      >
+                        {f.scheme} :{f.port}
+                        <span className="proxy-found-hint"> · {f.hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <p className="settings-field-label" style={{ marginTop: 16 }}>
+                  {t.settings.proxyProtocol}
+                </p>
+                <div className="settings-seg">
+                  {(['socks5', 'socks4', 'http', 'https'] as ProxyScheme[]).map((sch) => (
+                    <button
+                      key={sch}
+                      type="button"
+                      className={proxyParts.scheme === sch ? 'on' : ''}
+                      disabled={!proxyEnabled}
+                      onClick={() => syncProxyFromParts({ ...proxyParts, scheme: sch })}
+                    >
+                      {sch}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="proxy-host-row">
+                  <label className="proxy-field">
+                    <span className="settings-field-label">{t.settings.proxyHost}</span>
+                    <input
+                      type="text"
+                      value={proxyParts.host}
+                      disabled={!proxyEnabled}
+                      spellCheck={false}
+                      placeholder="127.0.0.1"
+                      onChange={(e) =>
+                        syncProxyFromParts({ ...proxyParts, host: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="proxy-field proxy-field-port">
+                    <span className="settings-field-label">{t.settings.proxyPort}</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={proxyParts.port}
+                      disabled={!proxyEnabled}
+                      spellCheck={false}
+                      placeholder="7890"
+                      onChange={(e) =>
+                        syncProxyFromParts({
+                          ...proxyParts,
+                          port: e.target.value.replace(/[^\d]/g, '').slice(0, 5),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+
                 <button
                   type="button"
-                  className={proxyMode === 'sc' ? 'on' : ''}
-                  onClick={() => setProxyMode('sc')}
+                  className="proxy-toggle-link"
                   disabled={!proxyEnabled}
+                  onClick={() => setProxyShowAuth((v) => !v)}
                 >
-                  {t.settings.proxyModeSc}
+                  {t.settings.proxyAuth}
+                  {proxyShowAuth ? ' ▴' : ' ▾'}
                 </button>
+                {proxyShowAuth && (
+                  <div className="proxy-host-row">
+                    <label className="proxy-field">
+                      <span className="settings-field-label">{t.settings.proxyUser}</span>
+                      <input
+                        type="text"
+                        value={proxyParts.user}
+                        disabled={!proxyEnabled}
+                        spellCheck={false}
+                        autoComplete="off"
+                        onChange={(e) =>
+                          syncProxyFromParts({ ...proxyParts, user: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="proxy-field">
+                      <span className="settings-field-label">{t.settings.proxyPass}</span>
+                      <input
+                        type="password"
+                        value={proxyParts.pass}
+                        disabled={!proxyEnabled}
+                        spellCheck={false}
+                        autoComplete="new-password"
+                        onChange={(e) =>
+                          syncProxyFromParts({ ...proxyParts, pass: e.target.value })
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
+
+                <p className="settings-field-label" style={{ marginTop: 14 }}>
+                  {t.settings.proxyMode}
+                </p>
+                <div className="settings-seg">
+                  <button
+                    type="button"
+                    className={proxyMode === 'sc' ? 'on' : ''}
+                    onClick={() => setProxyMode('sc')}
+                    disabled={!proxyEnabled}
+                  >
+                    {t.settings.proxyModeSc}
+                  </button>
+                  <button
+                    type="button"
+                    className={proxyMode === 'all' ? 'on' : ''}
+                    onClick={() => setProxyMode('all')}
+                    disabled={!proxyEnabled}
+                  >
+                    {t.settings.proxyModeAll}
+                  </button>
+                </div>
+
+                <p className="proxy-preview">
+                  <span className="settings-field-label">{t.settings.proxyPreview}</span>
+                  <code>{buildProxyUrl(proxyParts)}</code>
+                </p>
+
+                <div className="row-btns" style={{ marginTop: 14 }}>
+                  <button
+                    type="button"
+                    className="btn solid"
+                    onClick={() => void saveProxy({ test: true })}
+                    disabled={proxyBusy}
+                  >
+                    {proxyBusy ? '…' : t.settings.proxySaveTest}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void saveProxy()}
+                    disabled={proxyBusy}
+                  >
+                    {t.settings.proxySave}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void testProxy()}
+                    disabled={proxyBusy || !proxyEnabled}
+                  >
+                    {t.settings.proxyTest}
+                  </button>
+                </div>
+
                 <button
                   type="button"
-                  className={proxyMode === 'all' ? 'on' : ''}
-                  onClick={() => setProxyMode('all')}
+                  className="proxy-toggle-link"
                   disabled={!proxyEnabled}
+                  onClick={() => setProxyShowAdvanced((v) => !v)}
                 >
-                  {t.settings.proxyModeAll}
+                  {t.settings.proxyAdvanced}
+                  {proxyShowAdvanced ? ' ▴' : ' ▾'}
                 </button>
+                {proxyShowAdvanced && (
+                  <>
+                    <label className="settings-field-label">{t.settings.proxyUrl}</label>
+                    <input
+                      type="text"
+                      value={proxyUrl}
+                      disabled={!proxyEnabled}
+                      spellCheck={false}
+                      placeholder="socks5://127.0.0.1:12334"
+                      onChange={(e) => applyProxyUrlString(e.target.value)}
+                    />
+                    <p className="settings-hint">{t.settings.proxyExamples}</p>
+                  </>
+                )}
               </div>
-              <div className="row-btns" style={{ marginTop: 14 }}>
-                <button
-                  type="button"
-                  className="btn solid"
-                  onClick={() => void saveProxy()}
-                  disabled={proxyBusy}
-                >
-                  {proxyBusy ? '…' : t.settings.proxySave}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void testProxy()}
-                  disabled={proxyBusy || !proxyEnabled}
-                >
-                  {t.settings.proxyTest}
-                </button>
-              </div>
+
               {proxyMsg && (
                 <p className="note" style={{ marginTop: 12 }}>
                   {proxyMsg}
                 </p>
               )}
-              <p className="settings-hint">{t.settings.proxyExamples}</p>
             </section>
           )}
 

@@ -2837,6 +2837,93 @@ button {
   font-weight: 600;
 }
 
+.proxy-form.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.proxy-presets,
+.proxy-found {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.proxy-found {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.proxy-found-hint {
+  opacity: 0.65;
+  font-size: 11px;
+}
+.proxy-host-row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 10px;
+  margin-top: 12px;
+}
+.proxy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.proxy-field input {
+  width: 100%;
+}
+.proxy-field-port {
+  max-width: 120px;
+}
+.proxy-toggle-link {
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-2, #aaa);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.proxy-toggle-link:hover:not(:disabled) {
+  color: var(--ink, #eee);
+}
+.proxy-preview {
+  margin: 14px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.proxy-preview code {
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  word-break: break-all;
+  color: var(--ink, #e8e4dc);
+}
+.proxy-card .chip {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--text, #eee);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.proxy-card .chip.on {
+  background: var(--accent, #f2f2f7);
+  color: #111;
+  border-color: transparent;
+}
+.proxy-card .chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .settings-seg button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
