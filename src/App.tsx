@@ -137,33 +137,9 @@ type NavSnap = {
   userTab: 'tracks' | 'reposts' | 'playlists';
 };
 
-function MiniPlayerShell({ player }: { player: ReturnType<typeof usePlayer> }) {
-  const cur = player.current;
-  return (
-    <div className="mini-player-shell">
-      <div className="mini-player-meta">
-        <strong className="mini-player-title">{cur?.title || 'miura'}</strong>
-        <span className="mini-player-artist">{cur?.user?.username || '—'}</span>
-      </div>
-      <div className="mini-player-acts">
-        <button type="button" className="btn" onClick={() => player.playPrev()}>
-          ⏮
-        </button>
-        <button type="button" className="btn solid" onClick={() => player.toggle()}>
-          {player.state === 'playing' ? '⏸' : '▶'}
-        </button>
-        <button type="button" className="btn" onClick={() => player.playNext()}>
-          ⏭
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const t = useT();
   const player = usePlayer();
-  const isMini = typeof window !== 'undefined' && window.location.hash === '#mini';
   const [page, setPage] = useState<Page>('home');
   const [query, setQuery] = useState('');
   const [searchTab, setSearchTab] = useState<SearchTab>('tracks');
@@ -589,6 +565,45 @@ export default function App() {
     player.state === 'playing' ? Math.floor(player.progress / 15) : 0,
   ]);
 
+  // Mini-player / tray: push now-playing to main process (no second Audio instance)
+  useEffect(() => {
+    if (!window.electronAPI?.playerPushState) return;
+    const track = player.current;
+    const playable = track ? getPlayable(track.id) : null;
+    const art =
+      track?.artwork_url ||
+      playable?.artworkUrl ||
+      (playable?.source === 'youtube' && playable.uid.startsWith('yt:')
+        ? `https://i.ytimg.com/vi/${playable.uid.slice(3)}/mqdefault.jpg`
+        : null);
+    const httpArt =
+      art &&
+      !art.startsWith('data:') &&
+      !art.startsWith('blob:') &&
+      !art.startsWith('miura-file:') &&
+      !art.startsWith('miu-file:')
+        ? art.startsWith('//')
+          ? `https:${art}`
+          : art
+        : null;
+    void window.electronAPI.playerPushState({
+      title: track?.title || 'miura',
+      artist:
+        track?.user?.full_name ||
+        track?.user?.username ||
+        playable?.artist ||
+        '—',
+      playing: player.state === 'playing',
+      artworkUrl: httpArt || (art?.startsWith('data:') ? art : null),
+    });
+  }, [
+    player.current?.id,
+    player.current?.title,
+    player.current?.artwork_url,
+    player.current?.user?.username,
+    player.state,
+  ]);
+
   const runSearch = useCallback(
     async (q: string, tab: SearchTab = searchTab) => {
       const trimmed = q.trim();
@@ -623,8 +638,8 @@ export default function App() {
       setSearchTab(tab);
       try {
         const cacheKey = `sc:${tab}:${trimmed}`;
-        const cached = cacheGet<{ collection: Track[] }>(cacheKey);
         if (tab === 'tracks') {
+          const cached = cacheGet<{ collection: Track[] }>(cacheKey);
           const res = cached || (await searchTracks(trimmed, 40));
           if (!cached) cacheSet(cacheKey, res);
           setTracks(res.collection || []);
@@ -642,12 +657,14 @@ export default function App() {
           setStatus(`${res.collection?.length || 0} SC · ${ytCount} YT`);
         } else if (tab === 'playlists') {
           setYtHits([]);
+          const cached = cacheGet<{ collection: Playlist[] }>(cacheKey);
           const res = cached || (await searchPlaylists(trimmed, 36));
           if (!cached) cacheSet(cacheKey, res);
           setPlaylists(res.collection || []);
           setStatus(res.collection?.length ? `${res.collection.length} sets` : 'empty');
         } else {
           setYtHits([]);
+          const cached = cacheGet<{ collection: SoundCloudUser[] }>(cacheKey);
           const res = cached || (await searchUsers(trimmed, 36));
           if (!cached) cacheSet(cacheKey, res);
           setUsers(res.collection || []);
@@ -1305,14 +1322,6 @@ export default function App() {
     return (
       <div className="shell theme-frame profile-gate-shell">
         <ProfileGate profiles={miuraProfiles} onReady={applyMiuraProfileState} />
-      </div>
-    );
-  }
-
-  if (isMini) {
-    return (
-      <div className="shell theme-frame mini-root">
-        <MiniPlayerShell player={player} />
       </div>
     );
   }
@@ -4233,14 +4242,9 @@ function Settings({
                   />
                   <span>{t.settings.replayGain}</span>
                 </label>
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={playbackPrefs.gapless}
-                    onChange={(e) => onPlaybackPrefs({ gapless: e.target.checked })}
-                  />
-                  <span>{t.settings.gapless}</span>
-                </label>
+                <p className="settings-desc" style={{ marginTop: 8, opacity: 0.75 }}>
+                  {t.settings.gapless}
+                </p>
                 <label className="settings-field-label" style={{ marginTop: 12 }}>
                   {t.settings.crossfade}: {playbackPrefs.crossfadeSec}s
                 </label>

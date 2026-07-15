@@ -44,6 +44,8 @@ protocol.registerSchemesAsPrivileged([
 
 const isDev = !app.isPackaged;
 let mainWindow = null;
+/** Always-on-top control surface — no second audio engine */
+let miniPlayerWin = null;
 let loginWindow = null;
 let authServer = null;
 let authServerPort = 0;
@@ -956,8 +958,28 @@ function createWindow() {
 
 function broadcastMedia(cmd) {
   try {
+    // Always the main player window only (mini is control surface, no audio)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('media-command', cmd);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Shared now-playing for mini player window */
+let lastPlayerState = {
+  title: 'miura',
+  artist: '—',
+  playing: false,
+  artworkUrl: null,
+};
+
+function broadcastPlayerState(state) {
+  lastPlayerState = { ...lastPlayerState, ...state };
+  try {
+    if (miniPlayerWin && !miniPlayerWin.isDestroyed()) {
+      miniPlayerWin.webContents.send('player-state', lastPlayerState);
     }
   } catch {
     /* ignore */
@@ -2450,21 +2472,25 @@ app.whenReady().then(async () => {
     }
   });
 
-  /** Mini player window */
-  let miniPlayerWin = null;
+  /** Mini player — UI only; media commands route to main window */
   ipcMain.handle('local-open-mini-player', async () => {
     try {
       if (miniPlayerWin && !miniPlayerWin.isDestroyed()) {
         miniPlayerWin.show();
         miniPlayerWin.focus();
+        try {
+          miniPlayerWin.webContents.send('player-state', lastPlayerState);
+        } catch {
+          /* ignore */
+        }
         return { ok: true };
       }
       miniPlayerWin = new BrowserWindow({
-        width: 360,
-        height: 120,
-        minWidth: 280,
-        minHeight: 100,
-        maxHeight: 200,
+        width: 380,
+        height: 128,
+        minWidth: 300,
+        minHeight: 110,
+        maxHeight: 180,
         frame: true,
         alwaysOnTop: true,
         skipTaskbar: false,
@@ -2479,8 +2505,16 @@ app.whenReady().then(async () => {
         },
       });
       miniPlayerWin.setAlwaysOnTop(true, 'floating');
+      miniPlayerWin.setMenuBarVisibility(false);
       miniPlayerWin.on('closed', () => {
         miniPlayerWin = null;
+      });
+      miniPlayerWin.webContents.on('did-finish-load', () => {
+        try {
+          miniPlayerWin.webContents.send('player-state', lastPlayerState);
+        } catch {
+          /* ignore */
+        }
       });
       if (isDev) {
         await miniPlayerWin.loadURL('http://localhost:5173/#mini');
@@ -2493,6 +2527,26 @@ app.whenReady().then(async () => {
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+  });
+
+  ipcMain.handle('player-push-state', (_e, state) => {
+    try {
+      broadcastPlayerState(state && typeof state === 'object' ? state : {});
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('player-get-state', () => ({ ok: true, ...lastPlayerState }));
+
+  ipcMain.handle('media-command', (_e, cmd) => {
+    const c = String(cmd || '');
+    if (c === 'toggle' || c === 'next' || c === 'prev') {
+      broadcastMedia(c);
+      return { ok: true };
+    }
+    return { ok: false, error: 'unknown command' };
   });
 
   ipcMain.handle('local-pick-folder-watch', async () => {

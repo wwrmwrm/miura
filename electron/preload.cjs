@@ -23,6 +23,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('local-library-event', handler);
     return () => ipcRenderer.removeListener('local-library-event', handler);
   },
+  /** Main window → main process → mini window now-playing */
+  playerPushState: (state) => ipcRenderer.invoke('player-push-state', state),
+  playerGetState: () => ipcRenderer.invoke('player-get-state'),
+  onPlayerState: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('player-state', handler);
+    return () => ipcRenderer.removeListener('player-state', handler);
+  },
+  /** Mini / tray: command main player (no local audio) */
+  mediaCommand: (cmd) => ipcRenderer.invoke('media-command', cmd),
   resolveClientId: () => ipcRenderer.invoke('resolve-client-id'),
   authGet: () => ipcRenderer.invoke('auth-get'),
   authLogin: (opts) => ipcRenderer.invoke('auth-login', opts),

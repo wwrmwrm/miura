@@ -215,7 +215,7 @@ async function getTube(): Promise<Tube> {
     innertubePromise = (async () => {
       try {
         const { Innertube, Platform } = await import('youtubei.js');
-        installYtEval(Platform as Parameters<typeof installYtEval>[0]);
+        installYtEval(Platform as unknown as Parameters<typeof installYtEval>[0]);
         return await Innertube.create({
           generate_session_locally: true,
           fetch: safeFetch,
@@ -582,10 +582,11 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
 
   for (const client of clients) {
     try {
-      const info = await yt.getBasicInfo(id, client ? { client } : undefined);
+      const info = (await yt.getBasicInfo(id, client ? { client } : undefined)) as YtInfoLike;
       const url = await streamFromInfo(info, player, client || 'default');
       if (url) return url;
-      const n = (info.streaming_data?.formats?.length || 0) +
+      const n =
+        (info.streaming_data?.formats?.length || 0) +
         (info.streaming_data?.adaptive_formats?.length || 0);
       errors.push(`${client || 'default'}:0/${n}`);
     } catch (e) {

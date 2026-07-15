@@ -5,7 +5,11 @@ import { uk } from './locales/uk';
 
 export type Locale = 'ru' | 'en' | 'uk';
 
-const LOCALES: Record<Locale, Dict> = { ru, en, uk };
+const LOCALES: Record<Locale, Dict> = {
+  ru: ru as Dict,
+  en: en as Dict,
+  uk: uk as Dict,
+};
 
 const STORAGE_KEY = 'miura_locale';
 const STORAGE_KEY_LEGACY = 'miu_locale';

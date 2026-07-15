@@ -125,6 +125,28 @@ interface Window {
         eventType?: string;
       }) => void
     ) => () => void;
+    playerPushState: (state: {
+      title?: string;
+      artist?: string;
+      playing?: boolean;
+      artworkUrl?: string | null;
+    }) => Promise<{ ok: boolean; error?: string }>;
+    playerGetState: () => Promise<{
+      ok?: boolean;
+      title?: string;
+      artist?: string;
+      playing?: boolean;
+      artworkUrl?: string | null;
+    }>;
+    onPlayerState: (
+      callback: (state: {
+        title?: string;
+        artist?: string;
+        playing?: boolean;
+        artworkUrl?: string | null;
+      }) => void
+    ) => () => void;
+    mediaCommand: (cmd: 'toggle' | 'next' | 'prev' | string) => Promise<{ ok: boolean; error?: string }>;
     resolveClientId: () => Promise<string>;
     authGet: () => Promise<AuthSession | null>;
     authLogin: (opts?: { mode?: 'app' | 'browser' }) => Promise<AuthSession>;

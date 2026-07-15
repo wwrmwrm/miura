@@ -41,13 +41,16 @@ export async function resolveMusicUrl(raw: string): Promise<ResolvedUrl> {
       const t = await resolveUrl(input);
       if (t && typeof t === 'object' && 'title' in t && 'user' in t && !('track_count' in t && !('media' in t))) {
         // Track has media or duration; Playlist has track_count
-        if ('duration' in t && !('tracks' in t && Array.isArray((t as { tracks?: unknown }).tracks) && !(t as Track).media)) {
-          return { kind: 'soundcloud', track: t as Track };
+        if (
+          'duration' in t &&
+          !('tracks' in t && Array.isArray((t as { tracks?: unknown }).tracks) && !(t as unknown as Track).media)
+        ) {
+          return { kind: 'soundcloud', track: t as unknown as Track };
         }
       }
-      if (t && 'title' in t && 'permalink_url' in t && 'user' in t && typeof (t as Track).id === 'number') {
+      if (t && 'title' in t && 'permalink_url' in t && 'user' in t && typeof (t as unknown as Track).id === 'number') {
         // Prefer track if it looks like one
-        const maybe = t as Track & { kind?: string };
+        const maybe = t as unknown as Track & { kind?: string };
         if (maybe.kind !== 'playlist' && maybe.kind !== 'user') {
           return { kind: 'soundcloud', track: maybe };
         }

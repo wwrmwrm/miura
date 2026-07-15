@@ -1,12 +1,15 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { MiniPlayerApp } from './pages/MiniPlayerApp';
 import { I18nProvider } from './i18n';
 import { applyAppTheme, getStoredTheme } from './theme';
 import './styles.css';
 
 // Apply theme before first paint of React tree
 applyAppTheme(getStoredTheme());
+
+const isMini = typeof window !== 'undefined' && window.location.hash === '#mini';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -79,9 +82,13 @@ if (!root) {
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <I18nProvider>
-          <App />
-        </I18nProvider>
+        {isMini ? (
+          <MiniPlayerApp />
+        ) : (
+          <I18nProvider>
+            <App />
+          </I18nProvider>
+        )}
       </ErrorBoundary>
     </React.StrictMode>
   );

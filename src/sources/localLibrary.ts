@@ -40,6 +40,8 @@ export type LocalTrackMeta = {
   replayGainDb?: number | null;
   /** Embedded or sidecar lyrics text */
   lyrics?: string | null;
+  /** User edited tags in miura library (not written to disk file) */
+  userEdited?: boolean;
 };
 
 export type LocalSortKey =
@@ -148,6 +150,7 @@ export function pathToPlayable(p: LocalTrackMeta): Playable {
       missing: Boolean(p.missing),
       replayGainDb: p.replayGainDb ?? null,
       lyrics: p.lyrics || null,
+      userEdited: Boolean(p.userEdited) || undefined,
     },
   };
 }
@@ -228,6 +231,7 @@ export function saveLocalLibrary(tracks: Playable[]) {
         lastPlayedAt: typeof m.lastPlayedAt === 'number' ? m.lastPlayedAt : null,
         missing: Boolean(m.missing),
         replayGainDb: typeof m.replayGainDb === 'number' ? m.replayGainDb : null,
+        userEdited: Boolean(m.userEdited) || undefined,
         // lyrics can be large — keep if short enough
         lyrics:
           typeof m.lyrics === 'string' && m.lyrics.length < 12000 ? (m.lyrics as string) : null,
@@ -272,17 +276,37 @@ export function mergeLocalTracks(
         (typeof prev?.meta?.lastPlayedAt === 'number' ? prev.meta.lastPlayedAt : null),
       missing: false,
     });
-    // Preserve play stats / manual edits when re-enriching
+    // Preserve play stats / manual tag edits when re-enriching
     if (prev) {
+      const userEdited = Boolean(prev.meta?.userEdited);
       p.meta = {
         ...p.meta,
-        playCount: (prev.meta?.playCount as number) ?? p.meta?.playCount ?? 0,
-        lastPlayedAt: (prev.meta?.lastPlayedAt as number) ?? p.meta?.lastPlayedAt ?? null,
-        addedAt: (prev.meta?.addedAt as number) ?? p.meta?.addedAt ?? now,
-        rootFolder: (prev.meta?.rootFolder as string) || p.meta?.rootFolder || null,
-        // Prefer incoming tags when enriched; keep prev lyrics if new empty
+        playCount: (typeof prev.meta?.playCount === 'number' ? prev.meta.playCount : null) ?? p.meta?.playCount ?? 0,
+        lastPlayedAt:
+          (typeof prev.meta?.lastPlayedAt === 'number' ? prev.meta.lastPlayedAt : null) ??
+          p.meta?.lastPlayedAt ??
+          null,
+        addedAt:
+          (typeof prev.meta?.addedAt === 'number' ? prev.meta.addedAt : null) ?? p.meta?.addedAt ?? now,
+        rootFolder:
+          (typeof prev.meta?.rootFolder === 'string' ? prev.meta.rootFolder : null) ||
+          p.meta?.rootFolder ||
+          null,
         lyrics: (p.meta?.lyrics as string) || (prev.meta?.lyrics as string) || null,
+        userEdited: userEdited || undefined,
       };
+      // Manual library edits win over re-scanned ID3 until user clears userEdited
+      if (userEdited) {
+        p.title = prev.title;
+        p.artist = prev.artist;
+        p.meta = {
+          ...p.meta,
+          album: prev.meta?.album ?? p.meta?.album,
+          genre: prev.meta?.genre ?? p.meta?.genre,
+          year: prev.meta?.year ?? p.meta?.year,
+          trackNo: prev.meta?.trackNo ?? p.meta?.trackNo,
+        };
+      }
       if (!p.artworkUrl && prev.artworkUrl) p.artworkUrl = prev.artworkUrl;
     }
     map.set(key, p);
@@ -480,6 +504,8 @@ export function applyLocalTagEdit(
         year: edit.year !== undefined ? edit.year : t.meta?.year,
         trackNo: edit.trackNo !== undefined ? edit.trackNo : t.meta?.trackNo,
         lyrics: edit.lyrics !== undefined ? edit.lyrics : t.meta?.lyrics,
+        /** Survives re-enrich; disk files are not rewritten (library-only tags) */
+        userEdited: true,
       },
     };
   });

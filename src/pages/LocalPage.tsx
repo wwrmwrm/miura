@@ -816,6 +816,7 @@ export function LocalPage({ onPlay, onAddToQueue, currentUid }: Props) {
             save: t.common.save,
             cancel: t.common.cancel,
             heading: t.local.editTags,
+            note: t.local.tagsLibraryOnly,
           }}
         />
       )}
@@ -897,6 +898,7 @@ function TagEditorModal({
     <div className="local-modal-backdrop" onClick={onClose}>
       <div className="local-modal" onClick={(e) => e.stopPropagation()}>
         <h3>{labels.heading}</h3>
+        {labels.note ? <p className="note" style={{ marginBottom: 10 }}>{labels.note}</p> : null}
         <label>
           {labels.title}
           <input value={title} onChange={(e) => setTitle(e.target.value)} />

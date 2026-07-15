@@ -150,6 +150,8 @@ export const ru = {
     tagAlbum: 'Альбом',
     tagGenre: 'Жанр',
     tagYear: 'Год',
+    tagsLibraryOnly:
+      'Теги сохраняются только в библиотеке miura (файл на диске не перезаписывается).',
   },
   youtube: {
     title: 'YouTube',
@@ -223,11 +225,11 @@ export const ru = {
     navPlayback: 'Плеер',
     navAdvanced: 'Дополнительно',
     playback: 'Воспроизведение',
-    playbackHint: 'Нормализация, кроссфейд, эквалайзер, таймер сна, Last.fm.',
-    normalize: 'Нормализация громкости',
+    playbackHint: 'ReplayGain, плавный переход, эквалайзер, таймер сна, Last.fm.',
+    normalize: 'Ограничить усиление (не громче 100%)',
     replayGain: 'ReplayGain из тегов',
-    crossfade: 'Кроссфейд (сек)',
-    gapless: 'Gapless (меньше паузы)',
+    crossfade: 'Плавный переход (сек) — fade, не true crossfade',
+    gapless: 'Gapless (скоро)',
     eq: 'Эквалайзер',
     eqEnable: 'Включить EQ',
     sleepTimer: 'Таймер сна',
@@ -310,4 +312,15 @@ export const ru = {
   },
 } as const;
 
-export type Dict = typeof ru;
+/** Deep string tree so en/uk don't have to match ru string literal types */
+type DeepStringify<T> = {
+  [K in keyof T]: T[K] extends string
+    ? string
+    : T[K] extends readonly (infer U)[]
+      ? DeepStringify<U>[]
+      : T[K] extends object
+        ? DeepStringify<T[K]>
+        : T[K];
+};
+
+export type Dict = DeepStringify<typeof ru>;
