@@ -83,7 +83,26 @@ export function ProfilePage({
     setLocalCount(loadLocalLibrary().length);
   }, [profile.id]);
 
-  const localeTag = locale === 'uk' ? 'uk-UA' : locale === 'en' ? 'en-US' : 'ru-RU';
+  const localeTag =
+    locale === 'en'
+      ? 'en-US'
+      : locale === 'de'
+        ? 'de-DE'
+        : locale === 'es'
+          ? 'es-ES'
+          : locale === 'fr'
+            ? 'fr-FR'
+            : locale === 'it'
+              ? 'it-IT'
+              : locale === 'nl'
+                ? 'nl-NL'
+                : locale === 'pl'
+                  ? 'pl-PL'
+                  : locale === 'pt'
+                    ? 'pt-PT'
+                    : locale === 'sv'
+                      ? 'sv-SE'
+                      : 'ru-RU';
 
   const save = async () => {
     const displayName = name.trim();
