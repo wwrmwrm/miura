@@ -563,17 +563,21 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
 
   const yt = (await getTube()) as Tube & {
     getBasicInfo: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
+    getInfo?: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
     session?: { player?: YtPlayerLike };
   };
   const player = yt.session?.player;
 
-  // ANDROID/IOS usually return real progressive URLs; WEB often empty cipher stubs
+  // Prefer mobile/TV clients — progressive URLs more often
   const clients = [
     'ANDROID',
     'IOS',
+    'ANDROID_MUSIC',
+    'ANDROID_VR',
     'TV',
     'TV_EMBEDDED',
     'MWEB',
+    'WEB_EMBEDDED',
     'WEB',
     undefined,
   ] as const;
@@ -595,18 +599,34 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     }
   }
 
-  // Library helper (format:any is critical — default filters to mp4 only)
-  if (typeof yt.getStreamingData === 'function') {
+  // Full getInfo (sometimes has richer streaming_data)
+  if (typeof yt.getInfo === 'function') {
     for (const client of ['ANDROID', 'IOS', undefined] as const) {
+      try {
+        const info = (await yt.getInfo(id, client ? { client } : undefined)) as YtInfoLike;
+        const url = await streamFromInfo(info, player, `getInfo:${client || 'def'}`);
+        if (url) return url;
+      } catch (e) {
+        errors.push(`getInfo:${client}:${e instanceof Error ? e.message : e}`);
+      }
+    }
+  }
+
+  // Library helper — decipher Format objects, not only .url
+  if (typeof yt.getStreamingData === 'function') {
+    for (const client of ['ANDROID', 'IOS', 'TV', undefined] as const) {
       for (const opts of [
         { type: 'audio' as const, quality: 'best', format: 'any', client },
         { type: 'audio' as const, quality: 'best', format: 'mp4', client },
         { type: 'video+audio' as const, quality: 'best', format: 'any', client },
       ]) {
         try {
-          const format = await yt.getStreamingData(id, opts as { type: string; quality: string; format: string });
-          const url = String(format?.url || '');
-          if (url.startsWith('http')) {
+          const format = (await yt.getStreamingData(
+            id,
+            opts as { type: string; quality: string; format: string }
+          )) as YtFormatLike;
+          const url = await decipherFormat(format, player);
+          if (url?.startsWith('http')) {
             console.log('[yt] stream ok getStreamingData', client || 'def', opts.type);
             return url;
           }
@@ -617,8 +637,20 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     }
   }
 
+  // Reset innertube session once — stale player scripts break decipher
+  innertubePromise = null;
+  try {
+    const yt2 = (await getTube()) as typeof yt;
+    const player2 = yt2.session?.player;
+    const info = (await yt2.getBasicInfo(id, { client: 'ANDROID' })) as YtInfoLike;
+    const url = await streamFromInfo(info, player2, 'retry-ANDROID');
+    if (url) return url;
+  } catch (e) {
+    errors.push(`retry:${e instanceof Error ? e.message : e}`);
+  }
+
   throw new Error(
-    `YouTube: no playable audio URL (${errors.slice(0, 4).join(' · ') || 'no clients'}). ` +
+    `YouTube: no playable audio URL (${errors.slice(0, 5).join(' · ') || 'no clients'}). ` +
       'Проверь прокси / попробуй другой ролик.'
   );
 }

@@ -65,7 +65,19 @@ import { getPlayable } from './player/playableBridge';
 import { applyAppTheme, getStoredTheme, THEME_ORDER, type AppTheme } from './theme';
 import { useMediaHotkeys } from './hooks/useMediaHotkeys';
 import { loadRecent, pushRecent, trackToRecent } from './lib/recent';
-import { favIdFromTrack, loadFavorites, toggleFavorite, type FavItem } from './lib/miuraFavorites';
+import {
+  favIdFromPlayable,
+  favIdFromTrack,
+  loadFavorites,
+  toggleFavorite,
+  type FavItem,
+} from './lib/miuraFavorites';
+import {
+  clearSearchHistory,
+  loadSearchHistory,
+  pushSearchHistory,
+  removeSearchHistoryItem,
+} from './lib/searchHistory';
 import {
   buildProxyUrl,
   emptyParts,
@@ -145,12 +157,30 @@ type NavSnap = {
   userTab: 'tracks' | 'reposts' | 'playlists';
 };
 
+const PEOPLE_LABEL: Record<string, string> = {
+  ru: 'Люди',
+  en: 'People',
+  de: 'Personen',
+  es: 'Personas',
+  fr: 'Personnes',
+  it: 'Persone',
+  nl: 'Mensen',
+  pl: 'Ludzie',
+  pt: 'Pessoas',
+  sv: 'Personer',
+};
+
 export default function App() {
   const t = useT();
+  const { locale } = useI18n();
+  const peopleLabel = PEOPLE_LABEL[locale] || 'People';
   const player = usePlayer();
   const [page, setPage] = useState<Page>('home');
   const [query, setQuery] = useState('');
   const [searchTab, setSearchTab] = useState<SearchTab>('tracks');
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => loadSearchHistory());
+  /** Media library sub-view */
+  const [libraryView, setLibraryView] = useState<'favs' | 'sc-likes' | 'sc-playlists'>('favs');
   const [queueOpen, setQueueOpen] = useState(false);
   const [recent, setRecent] = useState(() => loadRecent());
   const [favorites, setFavorites] = useState<FavItem[]>(() => loadFavorites());
@@ -615,7 +645,13 @@ export default function App() {
   const runSearch = useCallback(
     async (q: string, tab: SearchTab = searchTab) => {
       const trimmed = q.trim();
-      if (!trimmed) return;
+      setSearchTab(tab);
+      setPage('search');
+      if (!trimmed) {
+        setStatus(null);
+        setError(null);
+        return;
+      }
 
       // Paste URL → play
       if (/^https?:\/\//i.test(trimmed) || /youtu\.?be/i.test(trimmed)) {
@@ -626,9 +662,11 @@ export default function App() {
           if (resolved.kind === 'youtube') {
             player.playPlayable(resolved.playable);
             setStatus('YouTube');
+            setSearchHistory(pushSearchHistory(trimmed));
           } else if (resolved.kind === 'soundcloud') {
             player.playTrack(resolved.track, [resolved.track]);
             setStatus('SoundCloud');
+            setSearchHistory(pushSearchHistory(trimmed));
           } else {
             setError('Ссылка не распознана (SoundCloud / YouTube)');
           }
@@ -642,15 +680,21 @@ export default function App() {
 
       setLoading(true);
       setError(null);
-      setPage('search');
-      setSearchTab(tab);
+      setSearchHistory(pushSearchHistory(trimmed));
       try {
         const cacheKey = `sc:${tab}:${trimmed}`;
         if (tab === 'tracks') {
           const cached = cacheGet<{ collection: Track[] }>(cacheKey);
-          const res = cached || (await searchTracks(trimmed, 40));
-          if (!cached) cacheSet(cacheKey, res);
-          setTracks(res.collection || []);
+          let scTracks: Track[] = [];
+          try {
+            const res = cached || (await searchTracks(trimmed, 40));
+            if (!cached) cacheSet(cacheKey, res);
+            scTracks = res.collection || [];
+            setTracks(scTracks);
+          } catch (e) {
+            setTracks([]);
+            console.warn('[search] SC tracks', e);
+          }
           let ytCount = 0;
           try {
             const yk = `yt:${trimmed}`;
@@ -659,24 +703,47 @@ export default function App() {
             if (!yc) cacheSet(yk, hits);
             setYtHits(hits);
             ytCount = hits.length;
-          } catch {
+          } catch (e) {
             setYtHits([]);
+            console.warn('[search] YT', e);
           }
-          setStatus(`${res.collection?.length || 0} SC · ${ytCount} YT`);
+          setStatus(`${scTracks.length} SC · ${ytCount} YT`);
+          if (!scTracks.length && !ytCount) {
+            setError(null);
+            setStatus(t.youtube.noResults);
+          }
         } else if (tab === 'playlists') {
           setYtHits([]);
-          const cached = cacheGet<{ collection: Playlist[] }>(cacheKey);
-          const res = cached || (await searchPlaylists(trimmed, 36));
-          if (!cached) cacheSet(cacheKey, res);
-          setPlaylists(res.collection || []);
-          setStatus(res.collection?.length ? `${res.collection.length} sets` : 'empty');
+          setTracks([]);
+          try {
+            const cached = cacheGet<{ collection: Playlist[] }>(cacheKey);
+            const res = cached || (await searchPlaylists(trimmed, 36));
+            if (!cached) cacheSet(cacheKey, res);
+            setPlaylists(res.collection || []);
+            setStatus(
+              res.collection?.length ? `${res.collection.length}` : t.youtube.noResults
+            );
+          } catch (e) {
+            setPlaylists([]);
+            setError(e instanceof Error ? e.message : 'Ошибка поиска');
+          }
         } else {
+          // users / people
           setYtHits([]);
-          const cached = cacheGet<{ collection: SoundCloudUser[] }>(cacheKey);
-          const res = cached || (await searchUsers(trimmed, 36));
-          if (!cached) cacheSet(cacheKey, res);
-          setUsers(res.collection || []);
-          setStatus(res.collection?.length ? `${res.collection.length} people` : 'empty');
+          setTracks([]);
+          setPlaylists([]);
+          try {
+            const cached = cacheGet<{ collection: SoundCloudUser[] }>(cacheKey);
+            const res = cached || (await searchUsers(trimmed, 36));
+            if (!cached) cacheSet(cacheKey, res);
+            setUsers(res.collection || []);
+            setStatus(
+              res.collection?.length ? `${res.collection.length}` : t.youtube.noResults
+            );
+          } catch (e) {
+            setUsers([]);
+            setError(e instanceof Error ? e.message : 'Ошибка поиска');
+          }
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Ошибка поиска');
@@ -684,7 +751,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [searchTab]
+    [searchTab, t.youtube.noResults]
   );
 
   const playList = useCallback(
@@ -834,21 +901,30 @@ export default function App() {
   }, [session?.user]);
 
   const go = async (id: Page) => {
-    // SC library tabs need login; miura "library" = local favorites/recent
+    // SC cloud library needs login
     if (['likes', 'playlists'].includes(id) && !isLoggedIn) {
       navigateTo('settings');
       setError('Войди в SoundCloud');
       return;
     }
-    if (id === 'library' && !isLoggedIn) {
+    // Media library always opens unified miura page (favs + optional SC)
+    if (id === 'library') {
+      setLibraryView('favs');
+      setFavorites(loadFavorites());
       navigateTo('library');
+      if (isLoggedIn) void loadLibrary();
       return;
     }
-    // With SC session, library rail opens SC likes
-    const next = id === 'library' && isLoggedIn ? 'likes' : id;
-    navigateTo(next);
-    if (next === 'home') await loadHome();
-    if (next === 'likes' || next === 'playlists') await loadLibrary();
+    navigateTo(id);
+    if (id === 'home') await loadHome();
+    if (id === 'likes' || id === 'playlists') {
+      setLibraryView(id === 'playlists' ? 'sc-playlists' : 'sc-likes');
+      navigateTo('library');
+      await loadLibrary();
+    }
+    if (id === 'search') {
+      setSearchHistory(loadSearchHistory());
+    }
   };
 
   const applySession = useCallback(async (s: AuthSession) => {
@@ -1268,9 +1344,7 @@ export default function App() {
     }
   };
 
-  const libraryTab: 'likes' | 'playlists' = page === 'playlists' ? 'playlists' : 'likes';
-  /** SoundCloud library only (not miura favorites page) */
-  const isLibraryPage = page === 'likes' || page === 'playlists';
+  const isLibraryPage = page === 'library' || page === 'likes' || page === 'playlists';
 
   const pageTitles: Partial<Record<Page, string>> = {
     home: t.nav.home,
@@ -1313,7 +1387,17 @@ export default function App() {
   ];
 
   const navActive = (id: Page) =>
-    page === id || (id === 'library' && (page === 'library' || page === 'likes' || page === 'playlists'));
+    page === id ||
+    (id === 'library' && (page === 'library' || page === 'likes' || page === 'playlists'));
+
+  const ytFavorites = useMemo(
+    () => favorites.filter((f) => f.source === 'youtube'),
+    [favorites]
+  );
+  const otherFavorites = useMemo(
+    () => favorites.filter((f) => f.source !== 'youtube'),
+    [favorites]
+  );
 
   if (!bootDone || !profileReady) {
     return (
@@ -1470,14 +1554,18 @@ export default function App() {
           </div>
           {page === 'search' && (
             <div className="chips">
-              {(['tracks', 'playlists', 'users'] as SearchTab[]).map((t) => (
+              {(['tracks', 'playlists', 'users'] as SearchTab[]).map((tab) => (
                 <button
-                  key={t}
+                  key={tab}
                   type="button"
-                  className={`chip ${searchTab === t ? 'on' : ''}`}
-                  onClick={() => void runSearch(query, t)}
+                  className={`chip ${searchTab === tab ? 'on' : ''}`}
+                  onClick={() => void runSearch(query, tab)}
                 >
-                  {t === 'tracks' ? 'Треки' : t === 'playlists' ? 'Плейлисты' : 'Люди'}
+                  {tab === 'tracks'
+                    ? t.local.viewTracks
+                    : tab === 'playlists'
+                      ? t.nav.playlists
+                      : peopleLabel}
                 </button>
               ))}
             </div>
@@ -1486,21 +1574,46 @@ export default function App() {
             <div className="chips">
               <button
                 type="button"
-                className={`chip ${libraryTab === 'likes' ? 'on' : ''}`}
-                onClick={() => void go('likes')}
+                className={`chip ${libraryView === 'favs' ? 'on' : ''}`}
+                onClick={() => {
+                  setLibraryView('favs');
+                  navigateTo('library');
+                  setFavorites(loadFavorites());
+                }}
               >
-                Лайки{likedTracks.length ? ` · ${likedTracks.length}` : ''}
+                ★ {t.profile.statFavs}
+                {favorites.length ? ` · ${favorites.length}` : ''}
               </button>
-              <button
-                type="button"
-                className={`chip ${libraryTab === 'playlists' ? 'on' : ''}`}
-                onClick={() => void go('playlists')}
-              >
-                Плейлисты
-                {libraryPlaylists.length || likedPlaylists.length
-                  ? ` · ${libraryPlaylists.length + likedPlaylists.length}`
-                  : ''}
-              </button>
+              {isLoggedIn && (
+                <>
+                  <button
+                    type="button"
+                    className={`chip ${libraryView === 'sc-likes' ? 'on' : ''}`}
+                    onClick={() => {
+                      setLibraryView('sc-likes');
+                      navigateTo('library');
+                      void loadLibrary();
+                    }}
+                  >
+                    SC {t.nav.likes}
+                    {likedTracks.length ? ` · ${likedTracks.length}` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className={`chip ${libraryView === 'sc-playlists' ? 'on' : ''}`}
+                    onClick={() => {
+                      setLibraryView('sc-playlists');
+                      navigateTo('library');
+                      void loadLibrary();
+                    }}
+                  >
+                    SC {t.nav.playlists}
+                    {libraryPlaylists.length || likedPlaylists.length
+                      ? ` · ${libraryPlaylists.length + likedPlaylists.length}`
+                      : ''}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </header>
@@ -1629,75 +1742,161 @@ export default function App() {
             </div>
           )}
 
-          {!loading && page === 'search' && searchTab === 'tracks' && (
-            <HomeShelf
-              section={{
-                id: 'search',
-                title: 'Результаты поиска',
-                kind: 'tracks',
-                tracks,
-                group: 'discover',
-              }}
-              currentId={player.current?.id}
-              likedIds={player.likedIds}
-              onPlayTrack={(t, list) => playList(list, t)}
-              onPlayAll={(list) => playList(list)}
-              onAdd={player.addToQueue}
-              onLike={toggleLike}
-              onStation={(t) => void startStation(t)}
-              onOpenPlaylist={(p) => void openPlaylist(p)}
-              onPlayPlaylist={(p) => void openPlaylist(p, { autoplay: true })}
-              onOpenTrack={(t) => void openTrack(t)}
-            />
-          )}
-
-          {!loading && page === 'search' && searchTab === 'tracks' && ytHits.length > 0 && (
-            <section className="chapter">
+          {!loading && page === 'search' && !query.trim() && searchHistory.length > 0 && (
+            <section className="chapter search-history">
               <div className="chapter-h">
-                <h2>YouTube</h2>
+                <h2>{t.common.search}</h2>
+                <button
+                  type="button"
+                  className="linkish"
+                  onClick={() => setSearchHistory(clearSearchHistory())}
+                >
+                  {t.common.remove}
+                </button>
               </div>
-              <div className="ledger">
-                {ytHits.map((p) => (
+              <div className="search-history-chips">
+                {searchHistory.map((h) => (
                   <button
-                    key={p.uid}
+                    key={h}
                     type="button"
-                    className="cell"
-                    onClick={() => player.playPlayable(p, ytHits)}
+                    className="chip"
+                    onClick={() => {
+                      setQuery(h);
+                      void runSearch(h, searchTab);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setSearchHistory(removeSearchHistoryItem(h));
+                    }}
+                    title={h}
                   >
-                    <div className="cell-top">
-                      {p.artworkUrl ? (
-                        <img className="cell-mark" src={p.artworkUrl} alt="" loading="lazy" />
-                      ) : (
-                        <div className="cell-mark" />
-                      )}
-                    </div>
-                    <div className="cell-body">
-                      <div className="cell-title">
-                        {p.title} <SourceBadge source="youtube" />
-                      </div>
-                      <div className="cell-meta">{p.artist}</div>
-                    </div>
+                    {h}
                   </button>
                 ))}
               </div>
             </section>
           )}
 
+          {!loading && page === 'search' && searchTab === 'tracks' && (
+            <>
+              {tracks.length > 0 && (
+                <HomeShelf
+                  section={{
+                    id: 'search',
+                    title: `SoundCloud · ${tracks.length}`,
+                    kind: 'tracks',
+                    tracks,
+                    group: 'discover',
+                  }}
+                  currentId={player.current?.id}
+                  likedIds={player.likedIds}
+                  onPlayTrack={(tr, list) => playList(list, tr)}
+                  onPlayAll={(list) => playList(list)}
+                  onAdd={player.addToQueue}
+                  onLike={toggleLike}
+                  onStation={(tr) => void startStation(tr)}
+                  onOpenPlaylist={(p) => void openPlaylist(p)}
+                  onPlayPlaylist={(p) => void openPlaylist(p, { autoplay: true })}
+                  onOpenTrack={(tr) => void openTrack(tr)}
+                />
+              )}
+              {ytHits.length > 0 && (
+                <section className="chapter">
+                  <div className="chapter-h">
+                    <h2>YouTube · {ytHits.length}</h2>
+                  </div>
+                  <div className="cat track-list-compact">
+                    {ytHits.map((p, i) => {
+                      const favId = favIdFromPlayable(p);
+                      const isFav = favorites.some((f) => f.id === favId);
+                      return (
+                        <div key={p.uid} className="cat-row track-row-compact">
+                          <button
+                            type="button"
+                            className="idx"
+                            onClick={() => player.playPlayable(p, ytHits)}
+                          >
+                            <span className="idx-num">{i + 1}</span>
+                            <span className="idx-play hover-only" aria-hidden>
+                              ▶
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="cat-art-wrap"
+                            onClick={() => player.playPlayable(p, ytHits)}
+                          >
+                            {p.artworkUrl ? (
+                              <img className="cat-art" src={p.artworkUrl} alt="" loading="lazy" />
+                            ) : (
+                              <div className="cat-art ph">♪</div>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            className="cat-main"
+                            onClick={() => player.playPlayable(p, ytHits)}
+                          >
+                            <span className="cat-title">
+                              {p.title} <SourceBadge source="youtube" />
+                            </span>
+                            <span className="cat-sub">{p.artist}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`op ico-btn ${isFav ? 'hot' : ''}`}
+                            title="★"
+                            onClick={() => {
+                              setFavorites(
+                                toggleFavorite({
+                                  id: favId,
+                                  title: p.title,
+                                  artist: p.artist,
+                                  artworkUrl: p.artworkUrl,
+                                  source: 'youtube',
+                                  playable: p,
+                                })
+                              );
+                            }}
+                          >
+                            {isFav ? '★' : '☆'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+              {query.trim() && !tracks.length && !ytHits.length && (
+                <EmptyState title={t.youtube.noResults} />
+              )}
+            </>
+          )}
+
           {!loading && page === 'search' && searchTab === 'playlists' && (
-            <LedgerPlaylists items={playlists} onOpen={(p) => void openPlaylist(p)} />
+            playlists.length ? (
+              <LedgerPlaylists items={playlists} onOpen={(p) => void openPlaylist(p)} />
+            ) : query.trim() ? (
+              <EmptyState title={t.youtube.noResults} />
+            ) : null
           )}
 
           {!loading && page === 'search' && searchTab === 'users' && (
-            <LedgerUsers items={users} onOpen={(u) => void openUser(u)} />
+            users.length ? (
+              <LedgerUsers items={users} onOpen={(u) => void openUser(u)} />
+            ) : query.trim() ? (
+              <EmptyState title={t.youtube.noResults} />
+            ) : null
           )}
 
-          {!loading && page === 'library' && (
+          {!loading && isLibraryPage && libraryView === 'favs' && (
             <section className="chapter miura-lib">
               <div className="chapter-h">
                 <h2>★ {t.profile.statFavs}</h2>
                 {favorites.length > 0 && (
                   <span className="note" style={{ margin: 0 }}>
                     {favorites.length}
+                    {ytFavorites.length ? ` · YT ${ytFavorites.length}` : ''}
                   </span>
                 )}
               </div>
@@ -1712,8 +1911,8 @@ export default function App() {
                         className="idx"
                         title={t.common.play}
                         onClick={() => {
-                          if (f.track) player.playTrack(f.track);
-                          else if (f.playable) player.playPlayable(f.playable);
+                          if (f.playable) player.playPlayable(f.playable);
+                          else if (f.track) player.playTrack(f.track);
                         }}
                       >
                         <span className="idx-num">{i + 1}</span>
@@ -1725,15 +1924,16 @@ export default function App() {
                         type="button"
                         className="cat-art-wrap"
                         onClick={() => {
-                          if (f.track) player.playTrack(f.track);
-                          else if (f.playable) player.playPlayable(f.playable);
+                          if (f.playable) player.playPlayable(f.playable);
+                          else if (f.track) player.playTrack(f.track);
                         }}
                       >
                         {f.artworkUrl ? (
                           <img
                             className="cat-art"
                             src={
-                              f.artworkUrl.startsWith('data:') || f.artworkUrl.startsWith('miura-file:')
+                              f.artworkUrl.startsWith('data:') ||
+                              f.artworkUrl.startsWith('miura-file:')
                                 ? f.artworkUrl
                                 : artworkUrl(f.artworkUrl, 't67x67')
                             }
@@ -1748,8 +1948,8 @@ export default function App() {
                         type="button"
                         className="cat-main"
                         onClick={() => {
-                          if (f.track) player.playTrack(f.track);
-                          else if (f.playable) player.playPlayable(f.playable);
+                          if (f.playable) player.playPlayable(f.playable);
+                          else if (f.track) player.playTrack(f.track);
                         }}
                       >
                         <span className="cat-title">
@@ -1795,8 +1995,8 @@ export default function App() {
                         type="button"
                         className="idx"
                         onClick={() => {
-                          if (r.track) player.playTrack(r.track);
-                          else if (r.playable) player.playPlayable(r.playable);
+                          if (r.playable) player.playPlayable(r.playable);
+                          else if (r.track) player.playTrack(r.track);
                         }}
                       >
                         <span className="idx-num">{i + 1}</span>
@@ -1808,15 +2008,16 @@ export default function App() {
                         type="button"
                         className="cat-art-wrap"
                         onClick={() => {
-                          if (r.track) player.playTrack(r.track);
-                          else if (r.playable) player.playPlayable(r.playable);
+                          if (r.playable) player.playPlayable(r.playable);
+                          else if (r.track) player.playTrack(r.track);
                         }}
                       >
                         {r.artworkUrl ? (
                           <img
                             className="cat-art"
                             src={
-                              r.artworkUrl.startsWith('data:') || r.artworkUrl.startsWith('miura-file:')
+                              r.artworkUrl.startsWith('data:') ||
+                              r.artworkUrl.startsWith('miura-file:')
                                 ? r.artworkUrl
                                 : artworkUrl(r.artworkUrl, 't67x67')
                             }
@@ -1831,8 +2032,8 @@ export default function App() {
                         type="button"
                         className="cat-main"
                         onClick={() => {
-                          if (r.track) player.playTrack(r.track);
-                          else if (r.playable) player.playPlayable(r.playable);
+                          if (r.playable) player.playPlayable(r.playable);
+                          else if (r.track) player.playTrack(r.track);
                         }}
                       >
                         <span className="cat-title">
@@ -1847,17 +2048,17 @@ export default function App() {
             </section>
           )}
 
-          {!loading && isLibraryPage && libraryTab === 'likes' && (
+          {!loading && isLibraryPage && libraryView === 'sc-likes' && (
             <section className="chapter">
               <div className="chapter-h">
-                <h2>Понравившиеся треки</h2>
+                <h2>SoundCloud · {t.nav.likes}</h2>
                 <button
                   type="button"
                   className="linkish"
                   onClick={() => playList(likedTracks)}
                   disabled={!likedTracks.length}
                 >
-                  Слушать всё
+                  {t.common.play}
                 </button>
               </div>
               {likedTracks.length ? (
@@ -1866,24 +2067,24 @@ export default function App() {
                   currentId={player.current?.id}
                   playbackState={player.state}
                   likedIds={player.likedIds}
-                  onPlay={(t) => playList(likedTracks, t)}
+                  onPlay={(tr) => playList(likedTracks, tr)}
                   onToggle={player.toggle}
                   onAdd={player.addToQueue}
                   onLike={toggleLike}
-                  onStation={(t) => void startStation(t)}
-                  onOpenTrack={(t) => void openTrack(t)}
-                  onAddToPlaylist={(t) => void openAddToPlaylist(t)}
+                  onStation={(tr) => void startStation(tr)}
+                  onOpenTrack={(tr) => void openTrack(tr)}
+                  onAddToPlaylist={(tr) => void openAddToPlaylist(tr)}
                 />
               ) : (
                 <div className="void">
-                  <h3>Пока пусто</h3>
-                  <p>Лайкай треки — они появятся здесь</p>
+                  <h3>{t.common.empty}</h3>
+                  <p>{t.profile.favsEmpty}</p>
                 </div>
               )}
             </section>
           )}
 
-          {!loading && isLibraryPage && libraryTab === 'playlists' && (
+          {!loading && isLibraryPage && libraryView === 'sc-playlists' && (
             <section className="chapter">
               <div className="chapter-h">
                 <h2>Твои плейлисты</h2>
@@ -2518,23 +2719,32 @@ export default function App() {
         onToggleFav={() => {
           const tr = player.current;
           if (!tr) return;
+          const playable = getPlayable(tr.id);
+          const source =
+            tr.genre === 'local' || tr.genre === 'youtube'
+              ? String(tr.genre)
+              : playable?.source || 'soundcloud';
+          const id = playable ? favIdFromPlayable(playable) : favIdFromTrack(tr);
           setFavorites(
             toggleFavorite({
-              id: favIdFromTrack(tr),
+              id,
               title: tr.title,
-              artist: tr.user?.username || '—',
-              artworkUrl: tr.artwork_url,
-              source:
-                tr.genre === 'local' || tr.genre === 'youtube'
-                  ? String(tr.genre)
-                  : 'soundcloud',
+              artist: tr.user?.username || playable?.artist || '—',
+              artworkUrl: tr.artwork_url || playable?.artworkUrl,
+              source,
               track: tr,
+              playable: playable || undefined,
             })
           );
         }}
         isFav={
           player.current
-            ? favorites.some((f) => f.id === favIdFromTrack(player.current!))
+            ? (() => {
+                const tr = player.current!;
+                const playable = getPlayable(tr.id);
+                const id = playable ? favIdFromPlayable(playable) : favIdFromTrack(tr);
+                return favorites.some((f) => f.id === id);
+              })()
             : false
         }
       />

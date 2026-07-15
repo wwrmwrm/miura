@@ -2855,6 +2855,19 @@ button {
   margin-top: 8px;
   margin-bottom: 4px;
 }
+
+.search-history-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.search-history-chips .chip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .proxy-form.is-disabled {
   opacity: 0.5;
   pointer-events: none;

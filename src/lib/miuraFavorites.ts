@@ -41,5 +41,23 @@ export function favIdFromTrack(track: Track): string {
     track.genre === 'local' || track.genre === 'youtube'
       ? track.genre
       : 'soundcloud';
+  // Prefer stable YouTube video id when present in permalink/uid-ish fields
+  if (src === 'youtube') {
+    const m = String(track.permalink_url || '').match(/(?:v=|youtu\.be\/)([\w-]{6,})/i);
+    if (m?.[1]) return `youtube:${m[1]}`;
+  }
   return `${src}:${track.id}`;
+}
+
+export function favIdFromPlayable(p: Playable): string {
+  if (p.source === 'youtube') {
+    const vid = String(p.meta?.videoId || p.uid.replace(/^yt:/, ''));
+    if (vid) return `youtube:${vid}`;
+  }
+  return `${p.source}:${p.uid}`;
+}
+
+export function favoritesBySource(list: FavItem[], source?: string): FavItem[] {
+  if (!source) return list;
+  return list.filter((f) => String(f.source) === source);
 }
