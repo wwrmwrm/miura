@@ -12,7 +12,7 @@ Multi-source **desktop music player** — Electron + React + TypeScript.
 | **SoundCloud** | Open progressive/HLS streams (api-v2). DRM-only tracks won’t play — see [docs/WIDEVINE.md](docs/WIDEVINE.md) |
 | **YouTube** | In-app search + stream (`youtubei.js`) |
 | **Playlists** | Text/M3U import, resolve across sources, virtualized long lists |
-| **Player** | Shuffle bag (no repeats until full cycle), EQ, soft fade, sleep timer, mini player (control surface) |
+| **Player** | Shuffle bag (no repeats until full cycle), queue, mini player control surface |
 | **Discord** | Rich Presence (built-in app) |
 | **i18n** | Русский / English / Українська |
 

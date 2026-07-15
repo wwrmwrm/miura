@@ -65,7 +65,6 @@ import { getPlayable } from './player/playableBridge';
 import { applyAppTheme, getStoredTheme, THEME_ORDER, type AppTheme } from './theme';
 import { useMediaHotkeys } from './hooks/useMediaHotkeys';
 import { loadRecent, pushRecent, trackToRecent } from './lib/recent';
-import { EQ_FREQS, EQ_PRESETS, type LocalPlaybackPrefs } from './lib/localPlaybackPrefs';
 import { favIdFromTrack, loadFavorites, toggleFavorite, type FavItem } from './lib/miuraFavorites';
 import {
   deleteProfile,
@@ -2471,11 +2470,6 @@ export default function App() {
               setClientIdInput={setClientIdInput}
               accent={accent}
               setAccent={setAccent}
-              playbackPrefs={player.playbackPrefs}
-              onPlaybackPrefs={player.updatePlaybackPrefs}
-              sleepMode={player.sleepMode}
-              sleepEndsAt={player.sleepEndsAt}
-              onSleepTimer={player.setSleepTimer}
               onLogin={handleLogin}
               onLogout={() => void handleLogout()}
               onSession={(s) => {
@@ -3558,11 +3552,6 @@ function Settings({
   setClientIdInput,
   accent,
   setAccent,
-  playbackPrefs,
-  onPlaybackPrefs,
-  sleepMode,
-  sleepEndsAt,
-  onSleepTimer,
   onLogin,
   onLogout,
   onSession,
@@ -3577,11 +3566,6 @@ function Settings({
   setClientIdInput: (v: string) => void;
   accent: string;
   setAccent: (v: string) => void;
-  playbackPrefs: LocalPlaybackPrefs;
-  onPlaybackPrefs: (p: Partial<LocalPlaybackPrefs>) => void;
-  sleepMode: 'off' | 'minutes' | 'track';
-  sleepEndsAt: number | null;
-  onSleepTimer: (mode: 'off' | 'minutes' | 'track', minutes?: number) => void;
   onLogin: (mode?: 'app' | 'browser') => void;
   onLogout: () => void;
   onSession: (s: AuthSession) => void;
@@ -3591,7 +3575,7 @@ function Settings({
   const t = useT();
   const { locale, setLocale } = useI18n();
   const [theme, setTheme] = useState<AppTheme>(() => getStoredTheme());
-  type SettingsTab = 'appearance' | 'account' | 'network' | 'discord' | 'playback' | 'advanced';
+  type SettingsTab = 'appearance' | 'account' | 'network' | 'discord' | 'advanced';
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
   const [profileName, setProfileName] = useState(miuraProfile?.displayName || '');
   const [profileBio, setProfileBio] = useState(miuraProfile?.bio || '');
@@ -3727,7 +3711,6 @@ function Settings({
     { id: 'account', label: t.settings.navAccount },
     { id: 'network', label: t.settings.navNetwork },
     { id: 'discord', label: t.settings.navDiscord },
-    { id: 'playback', label: t.settings.navPlayback },
     { id: 'advanced', label: t.settings.navAdvanced },
   ];
 
@@ -4219,189 +4202,6 @@ function Settings({
                 </p>
               )}
             </section>
-          )}
-
-          {settingsTab === 'playback' && (
-            <>
-              <section className="settings-card">
-                <h2>{t.settings.playback}</h2>
-                <p className="settings-desc">{t.settings.playbackHint}</p>
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={playbackPrefs.normalize}
-                    onChange={(e) => onPlaybackPrefs({ normalize: e.target.checked })}
-                  />
-                  <span>{t.settings.normalize}</span>
-                </label>
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={playbackPrefs.replayGain}
-                    onChange={(e) => onPlaybackPrefs({ replayGain: e.target.checked })}
-                  />
-                  <span>{t.settings.replayGain}</span>
-                </label>
-                <p className="settings-desc" style={{ marginTop: 8, opacity: 0.75 }}>
-                  {t.settings.gapless}
-                </p>
-                <label className="settings-field-label" style={{ marginTop: 12 }}>
-                  {t.settings.crossfade}: {playbackPrefs.crossfadeSec}s
-                </label>
-                <input
-                  type="range"
-                  min={0}
-                  max={8}
-                  step={0.5}
-                  value={playbackPrefs.crossfadeSec}
-                  onChange={(e) => onPlaybackPrefs({ crossfadeSec: Number(e.target.value) })}
-                />
-                <div className="row-btns" style={{ marginTop: 16 }}>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void window.electronAPI?.localOpenMiniPlayer?.()}
-                  >
-                    {t.settings.miniPlayer}
-                  </button>
-                </div>
-              </section>
-
-              <section className="settings-card">
-                <h2>{t.settings.eq}</h2>
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={playbackPrefs.eqEnabled}
-                    onChange={(e) => onPlaybackPrefs({ eqEnabled: e.target.checked })}
-                  />
-                  <span>{t.settings.eqEnable}</span>
-                </label>
-                <div className="eq-presets" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '10px 0' }}>
-                  {Object.keys(EQ_PRESETS).map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className="btn"
-                      onClick={() =>
-                        onPlaybackPrefs({ eq: [...EQ_PRESETS[name]!], eqEnabled: true })
-                      }
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-                <div className="eq-bands" style={{ display: 'flex', gap: 6, alignItems: 'end', height: 120 }}>
-                  {playbackPrefs.eq.map((g, i) => (
-                    <label
-                      key={i}
-                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: 10 }}
-                    >
-                      <input
-                        type="range"
-                        min={-12}
-                        max={12}
-                        step={1}
-                        value={g}
-                        style={
-                          {
-                            writingMode: 'vertical-lr',
-                            height: 90,
-                            width: 22,
-                            direction: 'rtl',
-                          } as React.CSSProperties
-                        }
-                        onChange={(e) => {
-                          const next = [...playbackPrefs.eq];
-                          next[i] = Number(e.target.value);
-                          onPlaybackPrefs({ eq: next, eqEnabled: true });
-                        }}
-                      />
-                      <span>
-                        {EQ_FREQS[i]! >= 1000
-                          ? `${EQ_FREQS[i]! / 1000}k`
-                          : String(EQ_FREQS[i])}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </section>
-
-              <section className="settings-card">
-                <h2>{t.settings.sleepTimer}</h2>
-                <div className="row-btns">
-                  <button
-                    type="button"
-                    className={`btn ${sleepMode === 'off' ? 'solid' : ''}`}
-                    onClick={() => onSleepTimer('off')}
-                  >
-                    {t.settings.sleepOff}
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn ${sleepMode === 'track' ? 'solid' : ''}`}
-                    onClick={() => onSleepTimer('track')}
-                  >
-                    {t.settings.sleepTrack}
-                  </button>
-                  {[15, 30, 45, 60].map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      className={`btn ${sleepMode === 'minutes' && sleepEndsAt && Math.abs(sleepEndsAt - Date.now() - m * 60000) < 5000 ? 'solid' : ''}`}
-                      onClick={() => onSleepTimer('minutes', m)}
-                    >
-                      {t.settings.sleepMin.replace('{n}', String(m))}
-                    </button>
-                  ))}
-                </div>
-                {sleepMode === 'minutes' && sleepEndsAt && (
-                  <p className="note" style={{ marginTop: 8 }}>
-                    {new Date(sleepEndsAt).toLocaleTimeString()}
-                  </p>
-                )}
-              </section>
-
-              <section className="settings-card">
-                <h2>{t.settings.lastfm}</h2>
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={playbackPrefs.lastfmEnabled}
-                    onChange={(e) => onPlaybackPrefs({ lastfmEnabled: e.target.checked })}
-                  />
-                  <span>{t.settings.lastfmEnable}</span>
-                </label>
-                <label className="settings-field-label">{t.settings.lastfmApiKey}</label>
-                <input
-                  type="text"
-                  value={playbackPrefs.lastfmApiKey}
-                  onChange={(e) => onPlaybackPrefs({ lastfmApiKey: e.target.value })}
-                  spellCheck={false}
-                />
-                <label className="settings-field-label">{t.settings.lastfmSecret}</label>
-                <input
-                  type="password"
-                  value={playbackPrefs.lastfmSecret}
-                  onChange={(e) => onPlaybackPrefs({ lastfmSecret: e.target.value })}
-                  spellCheck={false}
-                />
-                <label className="settings-field-label">{t.settings.lastfmSession}</label>
-                <input
-                  type="text"
-                  value={playbackPrefs.lastfmSessionKey}
-                  onChange={(e) => onPlaybackPrefs({ lastfmSessionKey: e.target.value })}
-                  spellCheck={false}
-                />
-                <label className="settings-field-label">{t.settings.lastfmUser}</label>
-                <input
-                  type="text"
-                  value={playbackPrefs.lastfmUser}
-                  onChange={(e) => onPlaybackPrefs({ lastfmUser: e.target.value })}
-                  spellCheck={false}
-                />
-              </section>
-            </>
           )}
 
           {settingsTab === 'advanced' && (

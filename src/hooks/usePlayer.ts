@@ -11,18 +11,6 @@ import {
   registerPlayableResolver,
 } from '../player/playableBridge';
 import { resolveYouTubeStreamUrl } from '../sources/youtube';
-import {
-  attachAudioFx,
-  fadeIn,
-  fadeOut,
-  type AudioFxHandle,
-} from '../lib/audioFx';
-import {
-  loadPlaybackPrefs,
-  savePlaybackPrefs,
-  type LocalPlaybackPrefs,
-} from '../lib/localPlaybackPrefs';
-import { lastfmScrobble, lastfmUpdateNowPlaying } from '../lib/lastfm';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
@@ -193,13 +181,6 @@ export function usePlayer() {
   const streamLoadedForIdRef = useRef<number | null>(null);
   /** blob: URL for local files — revoke on next load */
   const localBlobUrlRef = useRef<string | null>(null);
-  const audioFxRef = useRef<AudioFxHandle | null>(null);
-  const prefsRef = useRef<LocalPlaybackPrefs>(loadPlaybackPrefs());
-  const sleepTimerRef = useRef<number | null>(null);
-  const sleepModeRef = useRef<'off' | 'minutes' | 'track'>('off');
-  const scrobbleSentRef = useRef<number | null>(null);
-  const playedStartTsRef = useRef<number>(0);
-  const crossfadeLockRef = useRef(false);
 
   const revokeLocalBlob = () => {
     if (localBlobUrlRef.current) {
@@ -242,9 +223,6 @@ export function usePlayer() {
   const [stationSeed, setStationSeed] = useState<Track | null>(null);
   const [shuffle, setShuffle] = useState(() => Boolean(initial?.shuffle));
   const [repeat, setRepeat] = useState<RepeatMode>(() => initial?.repeat ?? 'off');
-  const [playbackPrefs, setPlaybackPrefs] = useState<LocalPlaybackPrefs>(() => loadPlaybackPrefs());
-  const [sleepEndsAt, setSleepEndsAt] = useState<number | null>(null);
-  const [sleepMode, setSleepMode] = useState<'off' | 'minutes' | 'track'>('off');
 
   // Seed pending seek once from last session (before first play loads stream)
   if (!restoredRef.current && initialProgress > 0 && pendingSeekRef.current === 0) {
@@ -464,23 +442,6 @@ export function usePlayer() {
       const skipOnFail = opts?.skipOnFail !== false;
       const startAt = opts?.startAt;
 
-      // Crossfade out previous (only when explicitly enabled)
-      const xfMs = Math.max(0, (prefsRef.current.crossfadeSec || 0) * 1000);
-      const hadStream = Boolean(audio.currentSrc) && streamLoadedForIdRef.current != null;
-      if (xfMs > 0 && audioFxRef.current && hadStream && !crossfadeLockRef.current) {
-        crossfadeLockRef.current = true;
-        try {
-          await fadeOut(audioFxRef.current, Math.min(xfMs, 4000));
-        } catch {
-          /* ignore */
-        } finally {
-          crossfadeLockRef.current = false;
-        }
-      } else {
-        // Never leave a stuck 0 fade from a previous incomplete crossfade
-        audioFxRef.current?.setFade(1);
-      }
-
       currentRef.current = track;
       setCurrent(track);
       setState('loading');
@@ -488,8 +449,6 @@ export function usePlayer() {
       setProgress(typeof startAt === 'number' && startAt > 0 ? startAt : 0);
       progressRef.current = typeof startAt === 'number' && startAt > 0 ? startAt : 0;
       setDuration(track.duration / 1000 || 0);
-      scrobbleSentRef.current = null;
-      playedStartTsRef.current = Date.now();
       // Count this track in the current shuffle cycle
       markShufflePlayed(track.id);
 
@@ -520,24 +479,8 @@ export function usePlayer() {
         await attachStream(audio, stream);
         streamLoadedForIdRef.current = track.id;
 
-        // ReplayGain from local playable meta
-        const playable = getPlayable(track.id);
-        const rg =
-          playable && typeof playable.meta?.replayGainDb === 'number'
-            ? (playable.meta.replayGainDb as number)
-            : null;
-        if (prefsRef.current.replayGain) {
-          audioFxRef.current?.setReplayGainDb(rg);
-        } else {
-          audioFxRef.current?.setReplayGainDb(null);
-        }
-        audioFxRef.current?.setUserVolume(volumeRef.current, mutedRef.current);
-        // Resume AudioContext + restore volume before play
-        try {
-          await audioFxRef.current?.resume();
-        } catch {
-          /* ignore */
-        }
+        audio.volume = mutedRef.current ? 0 : volumeRef.current;
+        audio.muted = mutedRef.current;
 
         // Only seek when caller asked (restore/toggle). Don't apply stale pendingSeek
         // when user starts a different track via playTrack.
@@ -561,28 +504,11 @@ export function usePlayer() {
         }
 
         if (autoplay) {
-          if (xfMs > 0) {
-            audioFxRef.current?.setFade(0);
-          } else {
-            audioFxRef.current?.setFade(1);
-            audioFxRef.current?.syncElementVolume();
-            // Element fallback when no WebAudio graph
-            if (!audioFxRef.current?.active) {
-              audio.volume = mutedRef.current ? 0 : volumeRef.current;
-              audio.muted = mutedRef.current;
-            }
-          }
           await audio.play();
-          if (xfMs > 0) {
-            void fadeIn(audioFxRef.current, Math.min(xfMs, 4000));
-          } else {
-            audioFxRef.current?.setFade(1);
-            audioFxRef.current?.syncElementVolume();
-          }
           skipFailCountRef.current = 0;
           setState('playing');
           void maybeExtendStation(track);
-          // Local play stats + Last.fm
+          const playable = getPlayable(track.id);
           if (playable?.source === 'local' && playable.filePath) {
             try {
               window.dispatchEvent(
@@ -592,12 +518,6 @@ export function usePlayer() {
               /* ignore */
             }
           }
-          void lastfmUpdateNowPlaying(
-            prefsRef.current,
-            track.user?.username || 'Unknown',
-            track.title || 'Track',
-            track.duration ? track.duration / 1000 : undefined
-          );
         } else {
           skipFailCountRef.current = 0;
           setState('paused');
@@ -605,17 +525,6 @@ export function usePlayer() {
         schedulePersist();
       } catch (e) {
         streamLoadedForIdRef.current = null;
-        // Restore audible fade after failed load/crossfade-out
-        try {
-          audioFxRef.current?.setFade(1);
-          audioFxRef.current?.syncElementVolume();
-          if (!audioFxRef.current?.active) {
-            audio.volume = mutedRef.current ? 0 : volumeRef.current;
-            audio.muted = mutedRef.current;
-          }
-        } catch {
-          /* ignore */
-        }
         const msg = e instanceof Error ? e.message : 'Не удалось воспроизвести';
         if (/429|rate limit|ограничил/i.test(msg)) {
           setState('error');
@@ -658,18 +567,6 @@ export function usePlayer() {
     audio.volume = volumeRef.current;
     audio.muted = mutedRef.current;
     audioRef.current = audio;
-    try {
-      audioFxRef.current = attachAudioFx(audio, prefsRef.current);
-      audioFxRef.current.setUserVolume(volumeRef.current, mutedRef.current);
-      // Guarantee audible baseline (WebAudio only if EQ/RG/crossfade needed)
-      audioFxRef.current.setFade(1);
-      audioFxRef.current.syncElementVolume();
-    } catch (e) {
-      console.warn('[audioFx]', e);
-      audioFxRef.current = null;
-      audio.volume = volumeRef.current;
-      audio.muted = mutedRef.current;
-    }
 
     let lastPersistAt = 0;
     const onTime = () => {
@@ -680,22 +577,6 @@ export function usePlayer() {
         lastPersistAt = now;
         schedulePersist();
       }
-      // Last.fm scrobble at 50% or 4 minutes
-      const cur = currentRef.current;
-      if (cur && scrobbleSentRef.current !== cur.id && audio.duration > 30) {
-        const half = audio.duration * 0.5;
-        if (audio.currentTime >= Math.min(half, 240)) {
-          scrobbleSentRef.current = cur.id;
-          void lastfmScrobble(
-            prefsRef.current,
-            cur.user?.username || 'Unknown',
-            cur.title || 'Track',
-            Math.floor((playedStartTsRef.current || Date.now()) / 1000),
-            audio.duration
-          );
-        }
-      }
-      // Near-end crossfade prefetch feel: fade starts slightly early is handled on next load
     };
     const onMeta = () => setDuration(audio.duration || 0);
     const onPlay = () => setState('playing');
@@ -704,15 +585,6 @@ export function usePlayer() {
       persistNow();
     };
     const onEnded = () => {
-      // Sleep: stop after this track
-      if (sleepModeRef.current === 'track') {
-        sleepModeRef.current = 'off';
-        setSleepMode('off');
-        setSleepEndsAt(null);
-        setState('paused');
-        persistNow();
-        return;
-      }
       const q = queueRef.current;
       const cur = currentRef.current;
       if (!q.length || !cur) return;
@@ -799,16 +671,6 @@ export function usePlayer() {
       audio.load();
       destroyHls();
       revokeLocalBlob();
-      try {
-        audioFxRef.current?.dispose();
-      } catch {
-        /* ignore */
-      }
-      audioFxRef.current = null;
-      if (sleepTimerRef.current != null) {
-        window.clearTimeout(sleepTimerRef.current);
-        sleepTimerRef.current = null;
-      }
       audio.removeEventListener('timeupdate', onTime);
       audio.removeEventListener('loadedmetadata', onMeta);
       audio.removeEventListener('durationchange', onMeta);
@@ -1064,22 +926,17 @@ export function usePlayer() {
 
   const setVolume = useCallback(
     (v: number) => {
+      const audio = audioRef.current;
       const clamped = Math.min(1, Math.max(0, v));
       volumeRef.current = clamped;
       setVolumeState(clamped);
-      if (clamped > 0 && mutedRef.current) {
-        mutedRef.current = false;
-        setIsMuted(false);
-      }
-      const audio = audioRef.current;
-      if (audioFxRef.current) {
-        audioFxRef.current.setUserVolume(clamped, mutedRef.current);
-        audioFxRef.current.syncElementVolume();
-      }
-      // Always keep element volume in sync for non-graph / fallback path
-      if (audio && !audioFxRef.current?.active) {
-        audio.volume = mutedRef.current ? 0 : clamped;
-        audio.muted = mutedRef.current;
+      if (audio) {
+        audio.volume = clamped;
+        if (clamped > 0 && audio.muted) {
+          audio.muted = false;
+          mutedRef.current = false;
+          setIsMuted(false);
+        }
       }
       schedulePersist();
     },
@@ -1087,64 +944,13 @@ export function usePlayer() {
   );
 
   const toggleMute = useCallback(() => {
-    const next = !mutedRef.current;
-    mutedRef.current = next;
-    setIsMuted(next);
-    if (audioFxRef.current) {
-      audioFxRef.current.setUserVolume(volumeRef.current, next);
-      audioFxRef.current.syncElementVolume();
-    }
-    if (audioRef.current && !audioFxRef.current?.active) {
-      audioRef.current.muted = next;
-      audioRef.current.volume = next ? 0 : volumeRef.current;
-    }
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.muted = !audio.muted;
+    mutedRef.current = audio.muted;
+    setIsMuted(audio.muted);
     schedulePersist();
   }, [schedulePersist]);
-
-  const updatePlaybackPrefs = useCallback((partial: Partial<LocalPlaybackPrefs>) => {
-    const next = { ...prefsRef.current, ...partial };
-    if (partial.eq) next.eq = [...partial.eq];
-    prefsRef.current = next;
-    setPlaybackPrefs(next);
-    savePlaybackPrefs(next);
-    audioFxRef.current?.applyPrefs(next);
-    audioFxRef.current?.setUserVolume(volumeRef.current, mutedRef.current);
-  }, []);
-
-  const setSleepTimer = useCallback((mode: 'off' | 'minutes' | 'track', minutes?: number) => {
-    if (sleepTimerRef.current != null) {
-      window.clearTimeout(sleepTimerRef.current);
-      sleepTimerRef.current = null;
-    }
-    if (mode === 'off') {
-      sleepModeRef.current = 'off';
-      setSleepMode('off');
-      setSleepEndsAt(null);
-      return;
-    }
-    if (mode === 'track') {
-      sleepModeRef.current = 'track';
-      setSleepMode('track');
-      setSleepEndsAt(null);
-      return;
-    }
-    const mins = Math.max(1, Math.min(180, minutes || 30));
-    const ends = Date.now() + mins * 60 * 1000;
-    sleepModeRef.current = 'minutes';
-    setSleepMode('minutes');
-    setSleepEndsAt(ends);
-    sleepTimerRef.current = window.setTimeout(() => {
-      const audio = audioRef.current;
-      if (audio) {
-        audio.pause();
-        setState('paused');
-      }
-      sleepModeRef.current = 'off';
-      setSleepMode('off');
-      setSleepEndsAt(null);
-      sleepTimerRef.current = null;
-    }, mins * 60 * 1000);
-  }, []);
 
   const toggleShuffle = useCallback(() => {
     setShuffle((s) => {
@@ -1274,9 +1080,6 @@ export function usePlayer() {
     stationSeed,
     shuffle,
     repeat,
-    playbackPrefs,
-    sleepMode,
-    sleepEndsAt,
     playTrack,
     playPlayable,
     addPlayableToQueue,
@@ -1290,8 +1093,6 @@ export function usePlayer() {
     toggleMute,
     toggleShuffle,
     cycleRepeat,
-    updatePlaybackPrefs,
-    setSleepTimer,
     addToQueue,
     addNext,
     playQueueIndex,
