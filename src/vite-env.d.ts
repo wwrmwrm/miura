@@ -283,6 +283,30 @@ interface Window {
       client?: string;
       error?: string;
     }>;
+    /** Hidden YouTube page player (reliable when googlevideo re-fetch 403s) */
+    ytEmbedPlay: (payload: {
+      videoId: string;
+      volume?: number;
+      startAt?: number;
+    }) => Promise<{
+      ok: boolean;
+      duration?: number;
+      currentTime?: number;
+      error?: string;
+      via?: string;
+    }>;
+    ytEmbedCommand: (payload: {
+      cmd: 'play' | 'pause' | 'seek' | 'volume' | 'status' | 'stop';
+      value?: number;
+    }) => Promise<{
+      ok: boolean;
+      hasMedia?: boolean;
+      paused?: boolean;
+      ended?: boolean;
+      currentTime?: number;
+      duration?: number;
+      error?: string;
+    }>;
     scEmbedPlay: (payload: {
       url: string;
       volume?: number;

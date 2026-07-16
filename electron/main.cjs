@@ -64,6 +64,8 @@ let authServerPort = 0;
 let pendingBrowserLogin = null; // { resolve, reject, timer }
 /** Hidden SoundCloud embed player (DRM tracks) */
 let scEmbedWin = null;
+/** Hidden YouTube watch window — audio only (googlevideo re-fetch always 403s) */
+let ytEmbedWin = null;
 
 // Realistic Chrome UA (match installed Chromium major roughly)
 const CHROME_UA =
@@ -3794,6 +3796,260 @@ app.whenReady().then(async () => {
           }
         }
         return { ok: true };
+      }
+      return { ok: false, error: 'unknown cmd' };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  /**
+   * YouTube playback in a real Chromium window.
+   * Extracted googlevideo URLs always 403 when re-fetched; the page player works.
+   */
+  function getYtEmbedWindow() {
+    if (ytEmbedWin && !ytEmbedWin.isDestroyed()) return ytEmbedWin;
+    const ses = getYtResolveSession();
+    try {
+      const cfg = readProxyConfig();
+      void applyProxyToSession(ses, cfg);
+    } catch {
+      /* ignore */
+    }
+    ytEmbedWin = new BrowserWindow({
+      width: 480,
+      height: 320,
+      show: false,
+      skipTaskbar: true,
+      frame: false,
+      backgroundColor: '#000000',
+      webPreferences: {
+        session: ses,
+        nodeIntegration: false,
+        contextIsolation: true,
+        backgroundThrottling: false,
+        autoplayPolicy: 'no-user-gesture-required',
+        sandbox: true,
+      },
+    });
+    try {
+      ytEmbedWin.webContents.setUserAgent(CHROME_UA);
+      ytEmbedWin.webContents.setBackgroundThrottling(false);
+      ytEmbedWin.webContents.setAudioMuted(false);
+    } catch {
+      /* ignore */
+    }
+    ytEmbedWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    ytEmbedWin.on('closed', () => {
+      ytEmbedWin = null;
+    });
+    return ytEmbedWin;
+  }
+
+  async function ytEmbedExec(code) {
+    const win = getYtEmbedWindow();
+    if (!win || win.isDestroyed()) throw new Error('yt embed window gone');
+    return win.webContents.executeJavaScript(code, true);
+  }
+
+  ipcMain.handle('yt-embed-play', async (_e, payload) => {
+    const videoId = String(payload?.videoId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{6,}$/.test(videoId)) {
+      return { ok: false, error: 'bad video id' };
+    }
+    const volume = Math.max(0, Math.min(1, Number(payload?.volume ?? 0.85)));
+    const startAt = Math.max(0, Number(payload?.startAt || 0) || 0);
+    const win = getYtEmbedWindow();
+
+    // Prefer embed (lighter) then fall back to watch
+    const urls = [
+      `https://www.youtube.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&enablejsapi=1&controls=1`,
+      `https://www.youtube.com/watch?v=${videoId}&bpctr=9999999999&has_verified=1`,
+    ];
+
+    let lastErr = '';
+    for (const pageUrl of urls) {
+      try {
+        console.log('[yt-embed] load', pageUrl.slice(0, 80));
+        await win.loadURL(pageUrl, {
+          userAgent: CHROME_UA,
+          httpReferrer: 'https://www.youtube.com/',
+        });
+        // Let player JS boot
+        await new Promise((r) => setTimeout(r, 800));
+
+        const result = await win.webContents.executeJavaScript(
+          `
+          (async () => {
+            const vol = ${volume};
+            const startAt = ${startAt};
+            const deadline = Date.now() + 22000;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            const clickPlay = () => {
+              const sels = [
+                'button.ytp-large-play-button',
+                'button.ytp-play-button',
+                'button[aria-label*="Play"]',
+                'button[title*="Play"]',
+                '.ytp-cued-thumbnail-overlay',
+              ];
+              for (const s of sels) {
+                const el = document.querySelector(s);
+                if (el) { try { el.click(); return true; } catch (e) {} }
+              }
+              return false;
+            };
+
+            const getVideo = () => document.querySelector('video');
+
+            while (Date.now() < deadline) {
+              let v = getVideo();
+              if (!v) {
+                clickPlay();
+                await sleep(300);
+                continue;
+              }
+              try {
+                v.muted = false;
+                v.volume = vol;
+                if (startAt > 1 && Number.isFinite(v.duration) && v.duration > startAt) {
+                  try { v.currentTime = startAt; } catch (e) {}
+                }
+                if (v.paused) {
+                  const p = v.play();
+                  if (p && p.catch) await p.catch(function () {});
+                }
+                // Wait until we actually have media time / readyState
+                if (v.readyState >= 2 || (v.currentTime > 0 && !v.paused) || v.duration > 0) {
+                  if (v.paused) {
+                    clickPlay();
+                    await sleep(200);
+                    try { await v.play(); } catch (e) {}
+                  }
+                  return {
+                    ok: true,
+                    duration: Number(v.duration) || 0,
+                    currentTime: Number(v.currentTime) || 0,
+                    via: location.pathname.indexOf('/embed/') >= 0 ? 'embed' : 'watch',
+                  };
+                }
+              } catch (e) {
+                /* keep trying */
+              }
+              clickPlay();
+              await sleep(280);
+            }
+
+            // Bot wall / age gate?
+            const bodyText = (document.body && document.body.innerText || '').slice(0, 400);
+            if (/sign in|confirm.*bot|login|unusual traffic|age/i.test(bodyText)) {
+              return { ok: false, error: 'YouTube: бот-проверка / нужен вход. Проверь SOCKS «весь трафик».' };
+            }
+            return { ok: false, error: 'YouTube: не удалось запустить видео в плеере' };
+          })()
+          `,
+          true
+        );
+
+        if (result?.ok) {
+          console.log('[yt-embed] ok', result.via, 'dur', result.duration);
+          return result;
+        }
+        lastErr = result?.error || 'no play';
+        console.warn('[yt-embed] miss', lastErr);
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : String(e);
+        console.warn('[yt-embed] err', lastErr);
+      }
+    }
+    return { ok: false, error: lastErr || 'YouTube embed failed' };
+  });
+
+  ipcMain.handle('yt-embed-command', async (_e, payload) => {
+    const cmd = String(payload?.cmd || '');
+    const value = payload?.value;
+    try {
+      if (cmd === 'stop') {
+        if (ytEmbedWin && !ytEmbedWin.isDestroyed()) {
+          try {
+            await ytEmbedWin.webContents.executeJavaScript(
+              `document.querySelectorAll('video,audio').forEach(m => { try { m.pause(); m.removeAttribute('src'); m.load(); } catch(e){} });`,
+              true
+            );
+            await ytEmbedWin.loadURL('about:blank');
+          } catch {
+            /* ignore */
+          }
+        }
+        return { ok: true };
+      }
+      if (!ytEmbedWin || ytEmbedWin.isDestroyed()) {
+        return { ok: false, error: 'no yt window', hasMedia: false, paused: true };
+      }
+      if (cmd === 'pause') {
+        return await ytEmbedExec(`
+          (() => {
+            const v = document.querySelector('video');
+            if (v) { v.pause(); return { ok: true }; }
+            const b = document.querySelector('button.ytp-play-button[data-title-no-tooltip="Pause"], button.ytp-play-button');
+            if (b) b.click();
+            return { ok: true };
+          })()
+        `);
+      }
+      if (cmd === 'play') {
+        return await ytEmbedExec(`
+          (async () => {
+            const v = document.querySelector('video');
+            if (v) {
+              try { await v.play(); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
+            }
+            const b = document.querySelector('button.ytp-large-play-button, button.ytp-play-button');
+            if (b) b.click();
+            return { ok: true };
+          })()
+        `);
+      }
+      if (cmd === 'seek') {
+        const t = Number(value) || 0;
+        return await ytEmbedExec(`
+          (() => {
+            const v = document.querySelector('video');
+            if (!v) return { ok: false };
+            const max = Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.25 : ${t};
+            v.currentTime = Math.max(0, Math.min(${t}, max));
+            return { ok: true, currentTime: v.currentTime, duration: v.duration || 0 };
+          })()
+        `);
+      }
+      if (cmd === 'volume') {
+        const v = Math.max(0, Math.min(1, Number(value) || 0));
+        return await ytEmbedExec(`
+          (() => {
+            document.querySelectorAll('video, audio').forEach((m) => {
+              m.volume = ${v};
+              m.muted = ${v} <= 0;
+            });
+            return { ok: true };
+          })()
+        `);
+      }
+      if (cmd === 'status') {
+        return await ytEmbedExec(`
+          (() => {
+            const v = document.querySelector('video');
+            if (!v) return { ok: true, hasMedia: false, paused: true, currentTime: 0, duration: 0, ended: false };
+            return {
+              ok: true,
+              hasMedia: true,
+              paused: !!v.paused,
+              ended: !!v.ended || (v.duration > 0 && v.currentTime >= v.duration - 0.35),
+              currentTime: Number(v.currentTime) || 0,
+              duration: Number(v.duration) || 0,
+            };
+          })()
+        `);
       }
       return { ok: false, error: 'unknown cmd' };
     } catch (e) {

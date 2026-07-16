@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** YouTube / Innertube (main process, proxy + direct fallback) */
   ytFetch: (payload) => ipcRenderer.invoke('yt-fetch', payload),
   ytResolveAudio: (videoId) => ipcRenderer.invoke('yt-resolve-audio', videoId),
+  /** Hidden Chromium YouTube player (real page audio — no googlevideo re-fetch) */
+  ytEmbedPlay: (payload) => ipcRenderer.invoke('yt-embed-play', payload),
+  ytEmbedCommand: (payload) => ipcRenderer.invoke('yt-embed-command', payload),
   /** Official SC embed window (legacy; prefer native DRM) */
   scEmbedPlay: (payload) => ipcRenderer.invoke('sc-embed-play', payload),
   scEmbedCommand: (payload) => ipcRenderer.invoke('sc-embed-command', payload),

@@ -181,6 +181,9 @@ export function usePlayer() {
   const streamLoadedForIdRef = useRef<number | null>(null);
   /** blob: URL for local files — revoke on next load */
   const localBlobUrlRef = useRef<string | null>(null);
+  /** YouTube plays in main-process hidden window (googlevideo re-fetch is 403) */
+  const ytEmbedActiveRef = useRef(false);
+  const ytPollRef = useRef<number | null>(null);
 
   const revokeLocalBlob = () => {
     if (localBlobUrlRef.current) {
@@ -192,6 +195,27 @@ export function usePlayer() {
       localBlobUrlRef.current = null;
     }
   };
+
+  const stopYtPoll = () => {
+    if (ytPollRef.current != null) {
+      window.clearInterval(ytPollRef.current);
+      ytPollRef.current = null;
+    }
+  };
+
+  const stopYtEmbed = useCallback(async () => {
+    stopYtPoll();
+    if (!ytEmbedActiveRef.current && !window.electronAPI?.ytEmbedCommand) {
+      ytEmbedActiveRef.current = false;
+      return;
+    }
+    ytEmbedActiveRef.current = false;
+    try {
+      await window.electronAPI?.ytEmbedCommand?.({ cmd: 'stop' });
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const initial = useRef(loadPersistedPlayer()).current;
   const initialProgress =
@@ -470,6 +494,8 @@ export function usePlayer() {
       markShufflePlayed(track.id);
 
       destroyHls();
+      // Stop previous YouTube embed so two tracks don't overlap
+      await stopYtEmbed();
       try {
         audio.pause();
         audio.removeAttribute('src');
@@ -479,7 +505,105 @@ export function usePlayer() {
       }
 
       try {
-        // Multi-source: local / youtube / custom resolver, else SoundCloud open streams
+        const playableEarly = getPlayable(track.id);
+        const isYouTube =
+          playableEarly?.source === 'youtube' ||
+          track.genre === 'youtube' ||
+          Boolean(playableEarly?.uid?.startsWith('yt:'));
+
+        // ——— YouTube: hidden Chromium page (URL re-fetch always 403) ———
+        if (isYouTube && window.electronAPI?.ytEmbedPlay) {
+          const videoId = String(
+            playableEarly?.meta?.videoId ||
+              playableEarly?.uid?.replace(/^yt:/, '') ||
+              ''
+          ).trim();
+          if (!videoId) throw new Error('YouTube: нет video id');
+
+          const seekTo =
+            typeof startAt === 'number' && startAt > 1
+              ? startAt
+              : pendingSeekRef.current > 1
+                ? pendingSeekRef.current
+                : 0;
+          pendingSeekRef.current = 0;
+
+          const r = await window.electronAPI.ytEmbedPlay({
+            videoId,
+            volume: mutedRef.current ? 0 : volumeRef.current,
+            startAt: seekTo,
+          });
+          if (!r?.ok) {
+            throw new Error(r?.error || 'YouTube: не удалось запустить плеер');
+          }
+
+          ytEmbedActiveRef.current = true;
+          streamLoadedForIdRef.current = track.id;
+          const dur =
+            (r.duration && r.duration > 0 ? r.duration : track.duration / 1000) || 0;
+          setDuration(dur);
+          setProgress(typeof r.currentTime === 'number' ? r.currentTime : seekTo || 0);
+          progressRef.current = typeof r.currentTime === 'number' ? r.currentTime : seekTo || 0;
+
+          stopYtPoll();
+          ytPollRef.current = window.setInterval(() => {
+            void (async () => {
+              if (!ytEmbedActiveRef.current) return;
+              try {
+                const s = await window.electronAPI?.ytEmbedCommand?.({ cmd: 'status' });
+                if (!s?.ok) return;
+                if (s.duration && s.duration > 0) setDuration(s.duration);
+                const t = Number(s.currentTime) || 0;
+                setProgress(t);
+                progressRef.current = t;
+                if (s.ended) {
+                  stopYtPoll();
+                  ytEmbedActiveRef.current = false;
+                  // Mirror <audio> ended → next track
+                  const q = queueRef.current;
+                  const cur = currentRef.current;
+                  if (!q.length || !cur) {
+                    setState('paused');
+                    return;
+                  }
+                  if (repeatRef.current === 'one') {
+                    void loadAndPlayRef.current(cur, { autoplay: true, startAt: 0 });
+                    return;
+                  }
+                  const idx = q.findIndex((x) => x.id === cur.id);
+                  const next = idx >= 0 ? q[idx + 1] : null;
+                  if (next) {
+                    void loadAndPlayRef.current(next);
+                    return;
+                  }
+                  if (repeatRef.current !== 'off' && q[0]) {
+                    void loadAndPlayRef.current(q[0]);
+                    return;
+                  }
+                  setState('paused');
+                } else if (s.paused === false) {
+                  setState('playing');
+                }
+              } catch {
+                /* ignore poll errors */
+              }
+            })();
+          }, 450);
+
+          skipFailCountRef.current = 0;
+          if (autoplay) {
+            setState('playing');
+            // ensure playing if page paused after load
+            void window.electronAPI.ytEmbedCommand?.({ cmd: 'play' });
+          } else {
+            void window.electronAPI.ytEmbedCommand?.({ cmd: 'pause' });
+            setState('paused');
+          }
+          schedulePersist();
+          return;
+        }
+
+        // Multi-source: local / custom resolver, else SoundCloud open streams
         let stream: StreamInfo;
         const external = getPlayableResolver(track.id);
         if (external) {
@@ -574,7 +698,7 @@ export function usePlayer() {
         setError(msg);
       }
     },
-    [attachStream, maybeExtendStation, schedulePersist, markShufflePlayed]
+    [attachStream, maybeExtendStation, schedulePersist, markShufflePlayed, stopYtEmbed]
   );
 
   loadAndPlayRef.current = loadAndPlay;
@@ -682,6 +806,9 @@ export function usePlayer() {
         window.clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
       }
+      stopYtPoll();
+      ytEmbedActiveRef.current = false;
+      void window.electronAPI?.ytEmbedCommand?.({ cmd: 'stop' });
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('beforeunload', flush);
       audio.pause();
@@ -876,6 +1003,12 @@ export function usePlayer() {
   }, [loadAndPlay, maybeExtendStation]);
 
   const playPrev = useCallback(() => {
+    if (ytEmbedActiveRef.current && progressRef.current > 3) {
+      void window.electronAPI?.ytEmbedCommand?.({ cmd: 'seek', value: 0 });
+      progressRef.current = 0;
+      setProgress(0);
+      return;
+    }
     const audio = audioRef.current;
     if (audio && audio.currentTime > 3) {
       audio.currentTime = 0;
@@ -912,7 +1045,32 @@ export function usePlayer() {
   const toggle = useCallback(() => {
     const audio = audioRef.current;
     const track = currentRef.current;
-    if (!audio || !track) return;
+    if (!track) return;
+
+    // YouTube embed path
+    if (ytEmbedActiveRef.current && streamLoadedForIdRef.current === track.id) {
+      void (async () => {
+        try {
+          const s = await window.electronAPI?.ytEmbedCommand?.({ cmd: 'status' });
+          if (s && s.paused === false) {
+            await window.electronAPI?.ytEmbedCommand?.({ cmd: 'pause' });
+            setState('paused');
+          } else {
+            await window.electronAPI?.ytEmbedCommand?.({ cmd: 'play' });
+            setState('playing');
+          }
+          persistNow();
+        } catch {
+          void loadAndPlay(track, {
+            autoplay: true,
+            startAt: progressRef.current > 1 ? progressRef.current : 0,
+          });
+        }
+      })();
+      return;
+    }
+
+    if (!audio) return;
 
     if (!audio.paused && streamLoadedForIdRef.current === track.id && audio.currentSrc) {
       audio.pause();
@@ -949,6 +1107,13 @@ export function usePlayer() {
   }, [loadAndPlay, persistNow]);
 
   const seek = useCallback((time: number) => {
+    if (ytEmbedActiveRef.current) {
+      progressRef.current = time;
+      setProgress(time);
+      void window.electronAPI?.ytEmbedCommand?.({ cmd: 'seek', value: time });
+      schedulePersist();
+      return;
+    }
     const audio = audioRef.current;
     if (!audio) return;
     // Stream not loaded yet (restored session) — remember position for first play
@@ -971,6 +1136,12 @@ export function usePlayer() {
       const clamped = Math.min(1, Math.max(0, v));
       volumeRef.current = clamped;
       setVolumeState(clamped);
+      if (ytEmbedActiveRef.current) {
+        void window.electronAPI?.ytEmbedCommand?.({
+          cmd: 'volume',
+          value: mutedRef.current ? 0 : clamped,
+        });
+      }
       if (audio) {
         audio.volume = clamped;
         if (clamped > 0 && audio.muted) {
@@ -986,10 +1157,16 @@ export function usePlayer() {
 
   const toggleMute = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.muted = !audio.muted;
-    mutedRef.current = audio.muted;
-    setIsMuted(audio.muted);
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setIsMuted(next);
+    if (audio) audio.muted = next;
+    if (ytEmbedActiveRef.current) {
+      void window.electronAPI?.ytEmbedCommand?.({
+        cmd: 'volume',
+        value: next ? 0 : volumeRef.current,
+      });
+    }
     schedulePersist();
   }, [schedulePersist]);
 
