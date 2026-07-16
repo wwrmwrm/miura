@@ -1,14 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="miura">
   <defs>
-    <!-- Warm washi / sumi paper night -->
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#14110f"/>
       <stop offset="55%" stop-color="#1a1613"/>
       <stop offset="100%" stop-color="#100e0c"/>
     </linearGradient>
-    <radialGradient id="moon" cx="78%" cy="22%" r="35%">
-      <stop offset="0%" stop-color="#f5efe6" stop-opacity="0.14"/>
-      <stop offset="45%" stop-color="#e8d5c4" stop-opacity="0.04"/>
+    <radialGradient id="wash" cx="82%" cy="28%" r="40%">
+      <stop offset="0%" stop-color="#f5efe6" stop-opacity="0.10"/>
+      <stop offset="55%" stop-color="#e8d5c4" stop-opacity="0.03"/>
       <stop offset="100%" stop-color="#14110f" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
@@ -19,62 +18,66 @@
       <stop offset="0%" stop-color="#c45c3e"/>
       <stop offset="100%" stop-color="#a84832"/>
     </linearGradient>
+    <linearGradient id="petal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e8c4b8" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#c45c3e" stop-opacity="0.25"/>
+    </linearGradient>
   </defs>
 
   <rect width="1280" height="640" fill="url(#bg)"/>
-  <rect width="1280" height="640" fill="url(#moon)"/>
+  <rect width="1280" height="640" fill="url(#wash)"/>
 
-  <!-- Soft paper grain (dots) -->
-  <g fill="#f5efe6" fill-opacity="0.025">
-    <circle cx="120" cy="80" r="1.2"/><circle cx="340" cy="140" r="0.9"/>
-    <circle cx="560" cy="60" r="1"/><circle cx="890" cy="200" r="1.1"/>
-    <circle cx="1100" cy="90" r="0.8"/><circle cx="200" cy="400" r="1"/>
-    <circle cx="700" cy="480" r="1.2"/><circle cx="1000" cy="520" r="0.9"/>
-    <circle cx="450" cy="560" r="1"/><circle cx="80" cy="520" r="0.8"/>
+  <!-- Quiet grain -->
+  <g fill="#f5efe6" fill-opacity="0.022">
+    <circle cx="140" cy="90" r="1.1"/><circle cx="380" cy="150" r="0.9"/>
+    <circle cx="620" cy="70" r="1"/><circle cx="920" cy="180" r="1.1"/>
+    <circle cx="1080" cy="100" r="0.8"/><circle cx="220" cy="420" r="1"/>
+    <circle cx="720" cy="500" r="1.1"/><circle cx="1040" cy="540" r="0.9"/>
   </g>
 
-  <!-- Thin frame — scroll / ma (negative space) -->
+  <!-- Frame -->
   <rect x="48" y="48" width="1184" height="544" fill="none" stroke="#f5efe6" stroke-opacity="0.07" stroke-width="1"/>
   <rect x="56" y="56" width="1168" height="528" fill="none" stroke="#f5efe6" stroke-opacity="0.04" stroke-width="1"/>
 
-  <!-- Ensō — open circle, imperfect brush feel -->
-  <g transform="translate(980, 320)" opacity="0.55">
-    <path
-      d="M 0 -118
-         C 68 -118 118 -68 118 0
-         C 118 68 68 118 0 118
-         C -68 118 -118 68 -118 0
-         C -118 -52 -78 -102 -28 -114"
-      fill="none"
-      stroke="#e8dcd0"
-      stroke-width="7"
-      stroke-linecap="round"
-      stroke-opacity="0.35"
-    />
-    <!-- small break / gap of the ensō -->
-    <path
-      d="M -20 -116 C -8 -119 4 -118 14 -114"
-      fill="none"
-      stroke="#14110f"
-      stroke-width="14"
-      stroke-linecap="round"
-    />
+  <!-- Right side: minimal sakura (simple geometry, not a broken circle) -->
+  <g transform="translate(980, 300)" opacity="0.9">
+    <!-- five soft petals -->
+    <g fill="url(#petal)" stroke="#e8c4b8" stroke-opacity="0.35" stroke-width="1">
+      <ellipse cx="0" cy="-48" rx="22" ry="36" transform="rotate(0)"/>
+      <ellipse cx="0" cy="-48" rx="22" ry="36" transform="rotate(72)"/>
+      <ellipse cx="0" cy="-48" rx="22" ry="36" transform="rotate(144)"/>
+      <ellipse cx="0" cy="-48" rx="22" ry="36" transform="rotate(216)"/>
+      <ellipse cx="0" cy="-48" rx="22" ry="36" transform="rotate(288)"/>
+    </g>
+    <!-- center -->
+    <circle cx="0" cy="0" r="10" fill="#c45c3e" fill-opacity="0.45"/>
+    <circle cx="0" cy="0" r="4" fill="#f5efe6" fill-opacity="0.35"/>
+    <!-- thin stem line, very quiet -->
+    <path d="M0 52 C 8 90 18 130 12 168" fill="none" stroke="#a89888" stroke-opacity="0.25" stroke-width="1.2" stroke-linecap="round"/>
   </g>
 
-  <!-- Vertical accent line (hashira) -->
+  <!-- Distant thin mountain / ink line (ma) -->
+  <path
+    d="M720 470 C 820 430 900 455 980 420 C 1040 395 1100 410 1180 390"
+    fill="none"
+    stroke="#f5efe6"
+    stroke-opacity="0.08"
+    stroke-width="1.2"
+    stroke-linecap="round"
+  />
+
+  <!-- Vertical vermilion accent -->
   <rect x="120" y="160" width="2" height="280" fill="url(#vermilion)" opacity="0.85"/>
 
-  <!-- Main type -->
+  <!-- Type -->
   <g font-family="'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Times New Roman', Georgia, serif">
     <text x="160" y="248" fill="url(#ink)" font-size="108" font-weight="500" letter-spacing="8">miura</text>
   </g>
 
-  <!-- Japanese subtitle -->
   <g font-family="'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', system-ui, sans-serif">
     <text x="160" y="300" fill="#a89888" font-size="18" font-weight="400" letter-spacing="10">音 の 余 白</text>
   </g>
 
-  <!-- English line -->
   <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
     <text x="160" y="360" fill="#e8dfd4" font-size="26" font-weight="400" letter-spacing="0.5">
       One player · every source
@@ -84,7 +87,7 @@
     </text>
   </g>
 
-  <!-- Minimal source marks — three vertical seals -->
+  <!-- Source marks -->
   <g transform="translate(160, 460)" font-family="ui-sans-serif, system-ui, sans-serif">
     <g>
       <rect width="88" height="36" rx="2" fill="none" stroke="#f5efe6" stroke-opacity="0.18"/>
@@ -100,13 +103,12 @@
     </g>
   </g>
 
-  <!-- Bottom left stamp (hanko-inspired square) -->
+  <!-- Hanko -->
   <g transform="translate(1120, 500)">
     <rect x="0" y="0" width="52" height="52" rx="3" fill="none" stroke="#c45c3e" stroke-width="1.5" stroke-opacity="0.7"/>
     <text x="26" y="33" text-anchor="middle" fill="#c45c3e" fill-opacity="0.85" font-size="20" font-family="'Hiragino Mincho ProN', 'Yu Mincho', serif" font-weight="600">音</text>
   </g>
 
-  <!-- Quiet footer -->
   <text x="160" y="560" fill="#5c534c" font-size="13" font-family="ui-sans-serif, system-ui, sans-serif" letter-spacing="2">
     ELECTRON  ·  REACT  ·  TYPESCRIPT  ·  MIT
   </text>
