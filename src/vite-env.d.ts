@@ -51,6 +51,12 @@ declare global {
 interface Window {
   electronAPI?: {
     getAppVersion: () => Promise<string>;
+    titlebarSetTheme?: (theme: 'black' | 'gray' | 'white' | string) => Promise<{ ok: boolean; error?: string }>;
+    windowMinimize?: () => Promise<{ ok: boolean; error?: string }>;
+    windowMaximizeToggle?: () => Promise<{ ok: boolean; maximized?: boolean; error?: string }>;
+    windowClose?: () => Promise<{ ok: boolean; error?: string }>;
+    windowIsMaximized?: () => Promise<{ ok: boolean; maximized?: boolean }>;
+    onWindowMaximized?: (callback: (maximized: boolean) => void) => () => void;
     localPickFiles: () => Promise<
       Array<{ path: string; name: string; size?: number; url?: string }> | { error: string }
     >;

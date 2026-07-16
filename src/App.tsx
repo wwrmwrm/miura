@@ -53,6 +53,7 @@ import {
 } from './api/soundcloud';
 import { Modal } from './components/Modal';
 import { ConfirmModal } from './components/ConfirmModal';
+import { TitleBar } from './components/TitleBar';
 import { usePlayer } from './hooks/usePlayer';
 import { useI18n, useT, LOCALE_LABELS, LOCALE_ORDER, type Locale } from './i18n';
 import { TrackPage } from './pages/TrackPage';
@@ -1440,7 +1441,8 @@ export default function App() {
 
   if (!bootDone || !profileReady) {
     return (
-      <div className="shell theme-frame profile-boot">
+      <div className="shell theme-frame has-titlebar profile-boot">
+        <TitleBar />
         <div className="profile-boot-inner">
           <MiuraMark />
           <p>{t.common.loading}</p>
@@ -1451,17 +1453,19 @@ export default function App() {
 
   if (!hasMiuraProfile) {
     return (
-      <div className="shell theme-frame profile-gate-shell">
+      <div className="shell theme-frame has-titlebar profile-gate-shell">
+        <TitleBar />
         <ProfileGate profiles={miuraProfiles} onReady={applyMiuraProfileState} />
       </div>
     );
   }
 
   return (
-    <div className="shell theme-frame">
+    <div className="shell theme-frame has-titlebar">
+      <TitleBar />
       <aside className="rail rail-wide" aria-label="Навигация">
         <div className="mark">
-          <MiuraMark />
+          <MiuraMark compact />
         </div>
 
         <nav className="rail-nav">

@@ -9,6 +9,15 @@ import './styles.css';
 // Apply theme before first paint of React tree
 applyAppTheme(getStoredTheme());
 
+// Platform class for titlebar padding (mac traffic lights)
+try {
+  const p = navigator.platform || '';
+  if (/Mac/i.test(p)) document.body.classList.add('platform-mac');
+  else if (/Win/i.test(p)) document.body.classList.add('platform-win');
+} catch {
+  /* ignore */
+}
+
 const isMini = typeof window !== 'undefined' && window.location.hash === '#mini';
 
 class ErrorBoundary extends React.Component<

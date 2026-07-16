@@ -2,6 +2,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  titlebarSetTheme: (theme) => ipcRenderer.invoke('titlebar-set-theme', theme),
+  windowMinimize: () => ipcRenderer.invoke('window-minimize'),
+  windowMaximizeToggle: () => ipcRenderer.invoke('window-maximize-toggle'),
+  windowClose: () => ipcRenderer.invoke('window-close'),
+  windowIsMaximized: () => ipcRenderer.invoke('window-is-maximized'),
+  onWindowMaximized: (callback) => {
+    const handler = (_event, maximized) => callback(Boolean(maximized));
+    ipcRenderer.on('window-maximized', handler);
+    return () => ipcRenderer.removeListener('window-maximized', handler);
+  },
   localPickFiles: () => ipcRenderer.invoke('local-pick-files'),
   localPickFolder: () => ipcRenderer.invoke('local-pick-folder'),
   localFileUrl: (filePath) => ipcRenderer.invoke('local-file-url', filePath),

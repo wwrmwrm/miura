@@ -35,9 +35,14 @@ export function applyAppTheme(theme: AppTheme) {
   } catch {
     /* ignore */
   }
-  // Electron title bar-ish chrome
+  // Match window chrome / custom title bar
   const deep =
-    theme === 'white' ? '#f2f2f7' : theme === 'gray' ? '#1c1c1e' : '#000000';
+    theme === 'white' ? '#fffcf8' : theme === 'gray' ? '#1e1b1a' : '#0a0908';
   document.documentElement.style.background = deep;
   if (document.body) document.body.style.background = deep;
+  try {
+    void window.electronAPI?.titlebarSetTheme?.(theme);
+  } catch {
+    /* ignore */
+  }
 }

@@ -1,6 +1,6 @@
 {
   "name": "miura",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "miura — multi-source music player (local, SoundCloud, YouTube)",
   "author": "miura",
@@ -27,7 +27,8 @@
     "productName": "miura",
     "copyright": "MIT © miura",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
@@ -46,6 +47,7 @@
       }
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",

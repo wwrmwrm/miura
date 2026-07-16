@@ -183,6 +183,183 @@ button {
   background: var(--bg-deep);
 }
 
+/* Custom title bar (Electron titleBarStyle: hidden + overlay) */
+.shell.has-titlebar {
+  --titlebar-h: env(titlebar-area-height, 38px);
+  grid-template-rows: var(--titlebar-h) 1fr var(--foot);
+}
+
+.shell.has-titlebar > .titlebar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.shell.has-titlebar > .rail {
+  grid-row: 2;
+}
+
+.shell.has-titlebar > .stage {
+  grid-row: 2;
+}
+
+.shell.has-titlebar > .bar {
+  grid-row: 3;
+}
+
+.titlebar {
+  position: relative;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--titlebar-h, 38px);
+  min-height: var(--titlebar-h, 38px);
+  padding: 0 6px 0 12px;
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-deep) 92%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 58%, transparent) 100%
+    );
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+}
+
+.titlebar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--brand-coral, #c45c3e) 45%, transparent) 22%,
+    color-mix(in srgb, var(--brand-coral-soft, #e8a090) 55%, transparent) 50%,
+    color-mix(in srgb, var(--brand-coral, #c45c3e) 35%, transparent) 78%,
+    transparent 100%
+  );
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.titlebar-inner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  height: 100%;
+}
+
+.titlebar-seal {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--brand-coral, #c45c3e) 75%, transparent);
+  color: color-mix(in srgb, var(--brand-coral, #c45c3e) 90%, var(--ink));
+  font-family: var(--serif);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
+}
+
+.titlebar-name {
+  font-family: var(--serif);
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.titlebar-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--line-2);
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.titlebar-kicker {
+  font-size: 0.62rem;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Custom − □ × */
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 100%;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  padding-left: 8px;
+}
+
+.titlebar-btn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.titlebar-btn:hover {
+  background: var(--fill-3);
+  color: var(--ink);
+}
+
+.titlebar-btn:active {
+  background: var(--fill-4);
+}
+
+.titlebar-btn-close:hover {
+  background: color-mix(in srgb, #e5484d 88%, transparent);
+  color: #fff;
+}
+
+.titlebar-btn-close:active {
+  background: #c23a2b;
+  color: #fff;
+}
+
+/* Clicks on controls only — rest of bar is drag */
+.titlebar a,
+.titlebar button,
+.titlebar input {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* macOS: leave space for traffic lights on the left */
+body.platform-darwin .titlebar,
+body.platform-mac .titlebar {
+  padding-left: 78px;
+}
+
 /*
  * Full-app wallpaper (entire window).
  * Photo + scrim so UI stays readable; no cropped corner masks.
@@ -283,7 +460,8 @@ html[data-theme='gray'] .shell.theme-frame::before {
 
 .shell > .rail,
 .shell > .stage,
-.shell > .bar {
+.shell > .bar,
+.shell > .titlebar {
   position: relative;
   z-index: 1;
   min-width: 0;
@@ -305,6 +483,35 @@ html[data-theme='gray'] .shell.theme-frame::before {
   grid-column: 1 / -1;
   grid-row: 2;
   z-index: 40;
+}
+
+.shell.has-titlebar > .rail {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.shell.has-titlebar > .stage {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.shell.has-titlebar > .bar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+/* Profile gate / boot: single column under titlebar */
+.shell.profile-gate-shell.has-titlebar,
+.shell.profile-boot.has-titlebar {
+  grid-template-columns: 1fr;
+  grid-template-rows: var(--titlebar-h, 38px) 1fr;
+}
+
+.shell.profile-gate-shell.has-titlebar > .profile-gate,
+.shell.profile-boot.has-titlebar > .profile-boot-inner {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
 }
 
 /* Overlays rendered inside .shell must not participate in grid placement */
@@ -337,8 +544,17 @@ html[data-theme='gray'] .shell.theme-frame::before {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 10px 8px 16px;
+  padding: 6px 8px 12px;
   user-select: none;
+}
+
+/* Sidebar mark is secondary when app titlebar already shows brand */
+.shell.has-titlebar .mark .miura-kicker {
+  display: none;
+}
+.shell.has-titlebar .mark .miura-logo {
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
 }
 
 /* Brand wordmark — same language as GitHub banner */
@@ -4516,10 +4732,19 @@ html[data-theme='gray'] .shell.theme-frame::before {
   grid-template-rows: 1fr;
 }
 
+.shell.profile-gate-shell.has-titlebar {
+  grid-template-columns: 1fr;
+  grid-template-rows: var(--titlebar-h, 38px) 1fr;
+}
+
 .shell.profile-gate-shell > .profile-gate {
   grid-column: 1;
   grid-row: 1;
   z-index: 2;
+}
+
+.shell.profile-gate-shell.has-titlebar > .profile-gate {
+  grid-row: 2;
 }
 
 .profile-boot {
@@ -4527,6 +4752,19 @@ html[data-theme='gray'] .shell.theme-frame::before {
   place-items: center;
   grid-template-columns: 1fr;
   grid-template-rows: 1fr;
+}
+
+.profile-boot.has-titlebar {
+  grid-template-rows: var(--titlebar-h, 38px) 1fr;
+  place-items: stretch;
+}
+
+.profile-boot.has-titlebar > .profile-boot-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
 }
 
 .profile-boot-inner {

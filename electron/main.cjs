@@ -1018,15 +1018,42 @@ async function enrichLocalTracks(list) {
   return out;
 }
 
+/** App icon for window / taskbar / tray (packaged + dev). */
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, 'assets', 'icon.ico'),
+    path.join(__dirname, 'assets', 'icon.png'),
+    path.join(__dirname, '..', 'build', 'icon.ico'),
+    path.join(__dirname, '..', 'build', 'icon.png'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const img = nativeImage.createFromPath(p);
+        if (img && !img.isEmpty()) return img;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const icon = resolveAppIcon();
+  const isWin = process.platform === 'win32';
+  const isMac = process.platform === 'darwin';
+
+  /** @type {Electron.BrowserWindowConstructorOptions} */
+  const winOpts = {
     width: 1240,
     height: 800,
     minWidth: 920,
     minHeight: 620,
-    backgroundColor: '#0a0a0b',
+    backgroundColor: '#0a0908',
     title: 'miura',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    icon: icon || undefined,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -1034,7 +1061,48 @@ function createWindow() {
       sandbox: false,
     },
     show: false,
-  });
+  };
+
+  if (isMac) {
+    // Traffic lights stay native; content draws brand strip
+    winOpts.titleBarStyle = 'hiddenInset';
+    winOpts.trafficLightPosition = { x: 14, y: 11 };
+  } else if (isWin) {
+    // Fully custom chrome — our − □ × buttons in the titlebar
+    winOpts.frame = false;
+    winOpts.thickFrame = true;
+  }
+
+  mainWindow = new BrowserWindow(winOpts);
+
+  try {
+    mainWindow.setMenuBarVisibility(false);
+    if (isWin) {
+      mainWindow.removeMenu();
+    }
+  } catch {
+    /* ignore */
+  }
+  if (icon) {
+    try {
+      mainWindow.setIcon(icon);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Keep renderer in sync with maximize state (□ ↔ restore)
+  const pushMaxState = () => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('window-maximized', mainWindow.isMaximized());
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+  mainWindow.on('maximize', pushMaxState);
+  mainWindow.on('unmaximize', pushMaxState);
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
@@ -1114,12 +1182,17 @@ function setupMediaShortcuts() {
 
 function setupTray() {
   try {
-    // 16x16 red circle PNG (minimal)
-    const png = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKElEQVQ4T2NkYGD4z0ABYBzVMKoBBgwMDIz/GUgFjIyM/0c1jGoAAMuoBQZqX7c0AAAAAElFTkSuQmCC',
-      'base64'
-    );
-    const img = nativeImage.createFromBuffer(png);
+    let img = resolveAppIcon();
+    if (img && !img.isEmpty()) {
+      // Tray prefers small bitmap
+      try {
+        img = img.resize({ width: 16, height: 16 });
+      } catch {
+        /* ignore */
+      }
+    } else {
+      img = nativeImage.createEmpty();
+    }
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img);
     tray.setToolTip('miura');
     const menu = Menu.buildFromTemplate([
@@ -2295,6 +2368,13 @@ function getYtAudio() {
 }
 
 app.whenReady().then(async () => {
+  // Drop default Electron File / Edit / View / Window / Help menu
+  try {
+    Menu.setApplicationMenu(null);
+  } catch {
+    /* ignore */
+  }
+
   // Local files for <audio src="miura-file://..."> (+ legacy miu-file)
   registerLocalFileProtocol('miura-file');
   registerLocalFileProtocol('miu-file');
@@ -2334,6 +2414,64 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('resolve-client-id', async () => resolveClientIdFromSoundCloud());
   ipcMain.handle('get-app-version', () => app.getVersion());
+
+  ipcMain.handle('titlebar-set-theme', (_e, theme) => {
+    try {
+      const win = BrowserWindow.fromWebContents(_e.sender) || mainWindow;
+      if (!win || win.isDestroyed()) return { ok: false };
+      const bg =
+        theme === 'white' ? '#fffcf8' : theme === 'gray' ? '#1e1b1a' : '#0a0908';
+      try {
+        win.setBackgroundColor(bg);
+      } catch {
+        /* ignore */
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  const windowFromEvent = (e) => BrowserWindow.fromWebContents(e.sender) || mainWindow;
+
+  ipcMain.handle('window-minimize', (e) => {
+    try {
+      windowFromEvent(e)?.minimize();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle('window-maximize-toggle', (e) => {
+    try {
+      const win = windowFromEvent(e);
+      if (!win || win.isDestroyed()) return { ok: false, maximized: false };
+      if (win.isMaximized()) win.unmaximize();
+      else win.maximize();
+      return { ok: true, maximized: win.isMaximized() };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle('window-close', (e) => {
+    try {
+      windowFromEvent(e)?.close();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle('window-is-maximized', (e) => {
+    try {
+      const win = windowFromEvent(e);
+      return { ok: true, maximized: Boolean(win && !win.isDestroyed() && win.isMaximized()) };
+    } catch {
+      return { ok: false, maximized: false };
+    }
+  });
 
   ipcMain.handle('local-pick-files', async () => {
     try {
@@ -2619,10 +2757,12 @@ app.whenReady().then(async () => {
         minHeight: 110,
         maxHeight: 180,
         frame: true,
+        autoHideMenuBar: true,
+        icon: resolveAppIcon() || undefined,
         alwaysOnTop: true,
         skipTaskbar: false,
         resizable: true,
-        backgroundColor: '#0a0a0b',
+        backgroundColor: '#0a0908',
         title: 'miura · mini',
         webPreferences: {
           preload: path.join(__dirname, 'preload.cjs'),
@@ -2632,7 +2772,12 @@ app.whenReady().then(async () => {
         },
       });
       miniPlayerWin.setAlwaysOnTop(true, 'floating');
-      miniPlayerWin.setMenuBarVisibility(false);
+      try {
+        miniPlayerWin.setMenuBarVisibility(false);
+        if (process.platform === 'win32') miniPlayerWin.removeMenu();
+      } catch {
+        /* ignore */
+      }
       miniPlayerWin.on('closed', () => {
         miniPlayerWin = null;
       });
