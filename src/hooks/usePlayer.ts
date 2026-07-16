@@ -412,18 +412,19 @@ export function usePlayer() {
           cleanup();
           const code = audio.error?.code;
           const src = String(audio.currentSrc || audio.src || '');
-          const isYt = /googlevideo\.com|youtube\.com|piped|invidious/i.test(src);
+          const isYt =
+            /googlevideo\.com|youtube\.com|piped|invidious|miura-yt:/i.test(src);
           const msg =
             code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
               ? isYt
-                ? 'YouTube: формат потока не поддерживается браузером (нужен m4a/mp4 audio).'
+                ? 'YouTube: поток не открылся. Нажми play ещё раз или выбери другой трек.'
                 : 'Формат не поддерживается (лучше MP3, M4A, FLAC, WAV, OGG). WMA — нет.'
               : code === MediaError.MEDIA_ERR_NETWORK
                 ? isYt
-                  ? 'YouTube: сеть/прокси отклонили поток (googlevideo 403?). Проверь SOCKS «весь трафик».'
+                  ? 'YouTube: сеть/прокси. Проверь SOCKS «весь трафик» и попробуй снова.'
                   : 'Не удалось прочитать файл (путь / права / miura-file).'
                 : isYt
-                  ? 'YouTube: ошибка загрузки аудио потока'
+                  ? 'YouTube: ошибка загрузки. Попробуй ещё раз.'
                   : 'Ошибка загрузки аудио';
           reject(new Error(msg));
         };
@@ -765,14 +766,14 @@ export function usePlayer() {
               () =>
                 reject(
                   new Error(
-                    'YouTube: таймаут 45с. Проверь прокси (весь трафик) и что VPN/SOCKS жив, затем перезапусти miura.'
+                    'YouTube: таймаут. Проверь SOCKS (весь трафик) и попробуй снова.'
                   )
                 ),
-              45_000
+              55_000
             );
           }),
         ]);
-        const isHls = url.includes('.m3u8');
+        const isHls = url.includes('.m3u8') && !url.startsWith('miura-yt:');
         return { url, protocol: isHls ? ('hls' as const) : ('progressive' as const) };
       }
       if (p.streamUrl) {

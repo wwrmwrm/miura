@@ -40,6 +40,18 @@ const localFileSchemePrivs = {
 protocol.registerSchemesAsPrivileged([
   { scheme: 'miura-file', privileges: { ...localFileSchemePrivs } },
   { scheme: 'miu-file', privileges: { ...localFileSchemePrivs } },
+  // Proxied YouTube/googlevideo audio for <audio> (headers + session proxy)
+  {
+    scheme: 'miura-yt',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+      corsEnabled: true,
+    },
+  },
 ]);
 
 const isDev = !app.isPackaged;
@@ -2256,10 +2268,104 @@ function toMiuraFileUrl(absPath) {
   return pathToFileURL(resolved).href.replace(/^file:/i, 'miura-file:');
 }
 
+/**
+ * googlevideo URLs often 403 / "not supported" in <audio> without YT referer
+ * and the same Chromium proxy session. Serve them via miura-yt://.
+ */
+function wrapYtStreamForPlayer(url, mime) {
+  const u = String(url || '');
+  if (!/^https:\/\//i.test(u)) return u;
+  if (/miura-yt:/i.test(u)) return u;
+  // HLS playlists need segment fetches — leave for hls.js / yt-fetch path
+  if (/\.m3u8(\?|$)/i.test(u) || /mpegURL|application\/vnd\.apple/i.test(String(mime || ''))) {
+    return u;
+  }
+  const q = new URLSearchParams();
+  q.set('u', u);
+  if (mime) q.set('m', String(mime).split(';')[0].trim());
+  return `miura-yt://play/?${q.toString()}`;
+}
+
+function registerYtMediaProtocol() {
+  try {
+    protocol.handle('miura-yt', async (request) => {
+      try {
+        const parsed = new URL(request.url);
+        const target = parsed.searchParams.get('u');
+        if (!target || !/^https:\/\//i.test(target)) {
+          return new Response('bad yt url', { status: 400 });
+        }
+        const mimeHint = parsed.searchParams.get('m') || '';
+        const headers = {
+          'User-Agent': CHROME_UA,
+          Referer: 'https://www.youtube.com/',
+          Origin: 'https://www.youtube.com',
+          Accept: '*/*',
+        };
+        try {
+          const range =
+            request.headers?.get?.('Range') ||
+            request.headers?.get?.('range') ||
+            null;
+          if (range) headers.Range = range;
+        } catch {
+          /* ignore */
+        }
+
+        const ses = session.defaultSession;
+        const doFetch =
+          typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
+        const res = await doFetch(target, {
+          method: 'GET',
+          headers,
+          // avoid recursion if any
+          bypassCustomProtocolHandlers: true,
+        });
+
+        const out = new Headers();
+        const ct =
+          res.headers.get('Content-Type') ||
+          res.headers.get('content-type') ||
+          mimeHint ||
+          'audio/mp4';
+        out.set('Content-Type', ct);
+        const cl = res.headers.get('Content-Length') || res.headers.get('content-length');
+        if (cl) out.set('Content-Length', cl);
+        const cr = res.headers.get('Content-Range') || res.headers.get('content-range');
+        if (cr) out.set('Content-Range', cr);
+        const ar = res.headers.get('Accept-Ranges') || res.headers.get('accept-ranges');
+        out.set('Accept-Ranges', ar || 'bytes');
+        // Help <audio> CORS-ish checks inside Electron
+        out.set('Access-Control-Allow-Origin', '*');
+
+        if (!res.ok && res.status !== 206) {
+          const preview = await res.text().catch(() => '');
+          console.warn(
+            '[miura-yt] upstream',
+            res.status,
+            target.slice(0, 80),
+            preview.slice(0, 120)
+          );
+          return new Response(preview || `upstream ${res.status}`, { status: res.status });
+        }
+
+        return new Response(res.body, { status: res.status, headers: out });
+      } catch (e) {
+        console.error('[miura-yt]', e);
+        return new Response(e instanceof Error ? e.message : String(e), { status: 502 });
+      }
+    });
+    console.log('[miura-yt] protocol ready');
+  } catch (e) {
+    console.warn('[miura-yt] protocol', e);
+  }
+}
+
 app.whenReady().then(async () => {
   // Local files for <audio src="miura-file://..."> (+ legacy miu-file)
   registerLocalFileProtocol('miura-file');
   registerLocalFileProtocol('miu-file');
+  registerYtMediaProtocol();
 
   // Optional Castlabs Widevine (only if someone swaps electron for ECS).
   // Default GitHub build uses stock Electron — open streams only.
@@ -3757,9 +3863,20 @@ app.whenReady().then(async () => {
     if (ytResolveInflight.has(id)) {
       return ytResolveInflight.get(id);
     }
-    const p = ytResolveAudioMainImpl(id).finally(() => {
-      ytResolveInflight.delete(id);
-    });
+    const p = ytResolveAudioMainImpl(id)
+      .then((r) => {
+        if (r?.ok && r.url && /^https:\/\//i.test(r.url)) {
+          const wrapped = wrapYtStreamForPlayer(r.url, r.mime);
+          if (wrapped !== r.url) {
+            console.log('[yt-resolve] wrap miura-yt', (r.mime || '').slice(0, 40), r.client);
+            return { ...r, url: wrapped, sourceUrl: r.url };
+          }
+        }
+        return r;
+      })
+      .finally(() => {
+        ytResolveInflight.delete(id);
+      });
     ytResolveInflight.set(id, p);
     return p;
   }
@@ -3796,11 +3913,17 @@ app.whenReady().then(async () => {
           f.audioSampleRate ||
           f.audio_quality;
         const hasVideo = /^video\//i.test(mime) || (f.width && f.height);
+        // Prefer pure audio m4a for <audio>; video-only is unusable
+        if (!hasAudio && hasVideo && !/itag=(18|22)/i.test(url)) continue;
         let score = Number(f.bitrate || f.averageBitrate || f.average_bitrate || 0);
         if (hasAudio && !hasVideo) score += 1e12;
         else if (hasAudio) score += 1e11;
         else score += 1e9;
-        if (/mp4|mp4a|m4a/i.test(mime)) score += 1e6;
+        // Chromium <audio> is happiest with mp4/mp4a; webm/opus often fails as "not supported"
+        if (/mp4a|audio\/mp4|m4a/i.test(mime)) score += 5e9;
+        else if (/mp4/i.test(mime) && hasAudio) score += 3e9;
+        else if (/opus|audio\/webm/i.test(mime)) score += 5e7;
+        else if (/webm/i.test(mime)) score += 1e7;
         scored.push({ url, score, mime });
       }
       scored.sort((a, b) => b.score - a.score);
@@ -4236,14 +4359,48 @@ app.whenReady().then(async () => {
       };
 
       const timer = setTimeout(() => {
+        // Prefer best collected stream over hard fail if we saw any
+        if (candidates.length) {
+          const best = pickBestCandidate(candidates);
+          console.log('[yt-resolve] browser intercept timeout-pick', best.mime, best.url.slice(0, 72));
+          finish({
+            ok: true,
+            url: best.url,
+            mime: best.mime,
+            protocol: 'progressive',
+            client: 'browser-intercept',
+          });
+          return;
+        }
         finish({ ok: false, error: 'timeout 28s (бот-стена или прокси медленный)' });
       }, 28000);
 
+      const candidates = [];
+      let settleTimer = null;
+
+      const scoreAudioUrl = (u) => {
+        let s = 0;
+        // Prefer m4a / mp4 audio for <audio>
+        if (/[/&?]itag=141(?:[&/]|$)/.test(u)) s += 1200;
+        else if (/[/&?]itag=140(?:[&/]|$)/.test(u)) s += 1100;
+        else if (/[/&?]itag=139(?:[&/]|$)/.test(u)) s += 900;
+        else if (/[/&?]itag=18(?:[&/]|$)/.test(u)) s += 850; // muxed mp4
+        else if (/[/&?]itag=22(?:[&/]|$)/.test(u)) s += 700;
+        else if (/[/&?]itag=251(?:[&/]|$)/.test(u)) s += 400; // webm opus
+        else if (/[/&?]itag=250(?:[&/]|$)/.test(u)) s += 300;
+        else if (/[/&?]itag=249(?:[&/]|$)/.test(u)) s += 200;
+        if (/mime=audio%2Fmp4|mime=audio\/mp4/i.test(u)) s += 500;
+        if (/mime=audio%2Fwebm|mime=audio\/webm/i.test(u)) s += 80;
+        // Pure video adaptive — almost never playable in <audio>
+        if (/mime=video%2F|mime=video\//i.test(u) && !/[/&?]itag=(18|22)(?:[&/]|$)/.test(u)) s -= 2000;
+        return s;
+      };
+
       const looksLikeAudio = (u) => {
         if (!u || !/googlevideo\.com/i.test(u)) return false;
+        if (scoreAudioUrl(u) < 0) return false;
         if (/mime=audio/i.test(u)) return true;
-        if (/[/&?]itag=(139|140|141|249|250|251|256|258)(?:[&/]|$)/.test(u)) return true;
-        if (/[/&?]itag=(18|22)(?:[&/]|$)/.test(u)) return true; // progressive muxed
+        if (/[/&?]itag=(139|140|141|249|250|251|256|258|18|22)(?:[&/]|$)/.test(u)) return true;
         return false;
       };
 
@@ -4260,21 +4417,56 @@ app.whenReady().then(async () => {
         }
       };
 
+      const pickBestCandidate = (list) => {
+        const ranked = list
+          .map((c) => ({ ...c, score: scoreAudioUrl(c.url) }))
+          .filter((c) => c.score >= 0)
+          .sort((a, b) => b.score - a.score);
+        return ranked[0] || list[0];
+      };
+
+      const mimeFromUrl = (u) => {
+        if (/mime=audio%2Fwebm|mime=audio\/webm/i.test(u)) return 'audio/webm';
+        if (/mime=audio%2Fmp4|mime=audio\/mp4|itag=(139|140|141)/i.test(u)) return 'audio/mp4';
+        if (/itag=(18|22)/i.test(u)) return 'video/mp4';
+        return 'audio/mp4';
+      };
+
+      const maybeFinishFromCandidates = (force) => {
+        if (settled || !candidates.length) return;
+        const best = pickBestCandidate(candidates);
+        const great = scoreAudioUrl(best.url) >= 900; // m4a / good mp4
+        if (!force && !great && candidates.length < 3) return;
+        if (settleTimer) {
+          clearTimeout(settleTimer);
+          settleTimer = null;
+        }
+        console.log('[yt-resolve] browser intercept', best.mime || mimeFromUrl(best.url), best.url.slice(0, 80));
+        finish({
+          ok: true,
+          url: best.url,
+          mime: best.mime || mimeFromUrl(best.url),
+          protocol: 'progressive',
+          client: 'browser-intercept',
+        });
+      };
+
       try {
         ses.webRequest.onBeforeRequest({ urls: ['*://*.googlevideo.com/*'] }, (details, cb) => {
           try {
             if (!settled && looksLikeAudio(details.url)) {
               const url = cleanMediaUrl(details.url);
-              console.log('[yt-resolve] browser intercept', url.slice(0, 80));
-              finish({
-                ok: true,
-                url,
-                mime: /mime=audio%2Fwebm|mime=audio\/webm/i.test(details.url)
-                  ? 'audio/webm'
-                  : 'audio/mp4',
-                protocol: 'progressive',
-                client: 'browser-intercept',
-              });
+              if (!candidates.some((c) => c.url === url)) {
+                candidates.push({ url, mime: mimeFromUrl(url) });
+              }
+              // Prefer waiting briefly for m4a (itag 140) instead of first webm
+              if (scoreAudioUrl(url) >= 900) {
+                maybeFinishFromCandidates(true);
+              } else if (!settleTimer) {
+                settleTimer = setTimeout(() => maybeFinishFromCandidates(true), 2200);
+              } else {
+                maybeFinishFromCandidates(false);
+              }
             }
           } catch {
             /* ignore */
@@ -4334,9 +4526,20 @@ app.whenReady().then(async () => {
                       return /audio/i.test(m) && !/^video\\//i.test(m);
                     });
                     audio.sort(function (a, b) {
-                      return (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0);
+                      var ma = String(a.mimeType || '');
+                      var mb = String(b.mimeType || '');
+                      var sa = /mp4a|audio\\/mp4/i.test(ma) ? 1e9 : /webm|opus/i.test(ma) ? 1e6 : 0;
+                      var sb = /mp4a|audio\\/mp4/i.test(mb) ? 1e9 : /webm|opus/i.test(mb) ? 1e6 : 0;
+                      sa += Number(a.bitrate) || 0;
+                      sb += Number(b.bitrate) || 0;
+                      return sb - sa;
                     });
-                    var pick = audio[0] || withUrl[0] || null;
+                    // Prefer pure audio; muxed mp4 (itag 18) as fallback — not raw video-only
+                    var muxed = withUrl.filter(function (f) {
+                      var m = String(f.mimeType || '');
+                      return /^video\\/mp4/i.test(m) && /mp4a|audio/i.test(m);
+                    });
+                    var pick = audio[0] || muxed[0] || null;
                     var hls = sd.hlsManifestUrl || sd.hls_manifest_url || null;
                     return {
                       ok: !!(pick && pick.url) || !!(hls && String(hls).indexOf('http') === 0),

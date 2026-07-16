@@ -4786,19 +4786,52 @@ function PlayerBar({
   );
 
   const errText = error ? String(error) : '';
-  const subline = errText
-    ? errText
-    : state === 'loading'
-      ? 'загрузка…'
-      : stationMode
-        ? `станция · ${current?.user?.username ?? ''}`
-        : current?.user?.username ?? '—';
+  const errView = errText
+    ? (() => {
+        if (/таймаут|timeout/i.test(errText)) {
+          return {
+            title: 'YouTube: таймаут',
+            detail: 'Проверь SOCKS «весь трафик» и нажми play ещё раз.',
+          };
+        }
+        if (/формат|не открылся|не поддерживается/i.test(errText)) {
+          return {
+            title: 'YouTube: поток не открылся',
+            detail: 'Попробуй ещё раз или другой трек.',
+          };
+        }
+        if (/бот|LOGIN_REQUIRED|блокирует/i.test(errText)) {
+          return {
+            title: 'YouTube: бот-проверка',
+            detail: 'Нужен живой прокси (весь трафик) и перезапуск miura.',
+          };
+        }
+        if (/сеть|прокси|403/i.test(errText)) {
+          return {
+            title: 'YouTube: сеть',
+            detail: 'SOCKS не достучался до потока. Проверь VPN/прокси.',
+          };
+        }
+        // One short line for the bar; full text in title tooltip
+        const one = errText.replace(/\s+/g, ' ').trim();
+        return {
+          title: 'Ошибка воспроизведения',
+          detail: one.length > 140 ? `${one.slice(0, 140)}…` : one,
+        };
+      })()
+    : null;
+  const subline = state === 'loading'
+    ? 'загрузка…'
+    : stationMode
+      ? `станция · ${current?.user?.username ?? ''}`
+      : current?.user?.username ?? '—';
 
   return (
-    <footer className={`bar ${state === 'playing' ? 'is-playing' : ''} ${errText ? 'has-error' : ''}`}>
-      {errText ? (
+    <footer className={`bar ${state === 'playing' ? 'is-playing' : ''} ${errView ? 'has-error' : ''}`}>
+      {errView ? (
         <div className="bar-error-banner" role="alert" title={errText}>
-          {errText}
+          <div className="bar-error-title">{errView.title}</div>
+          <div className="bar-error-detail">{errView.detail}</div>
         </div>
       ) : null}
       <div className="bar-now">
@@ -4822,14 +4855,12 @@ function PlayerBar({
               {current && isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
             </div>
           )}
-          {current?.user && onOpenUser && !errText ? (
+          {current?.user && onOpenUser ? (
             <button type="button" className="aa btn-like" onClick={onOpenUser}>
               {subline}
             </button>
           ) : (
-            <div className={`aa ${errText ? 'is-err' : ''}`} title={errText || undefined}>
-              {subline}
-            </div>
+            <div className="aa">{subline}</div>
           )}
         </div>
         {state === 'playing' && (
