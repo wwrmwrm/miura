@@ -758,21 +758,30 @@ export function usePlayer() {
       }
       if (p.source === 'youtube') {
         const videoId = String(p.meta?.videoId || p.uid.replace(/^yt:/, ''));
-        // Hard cap so UI never sits on "…" forever without an error
-        const url = await Promise.race([
-          resolveYouTubeStreamUrl(videoId),
-          new Promise<string>((_, reject) => {
-            window.setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    'YouTube: таймаут. Проверь SOCKS (весь трафик) и попробуй снова.'
-                  )
-                ),
-              55_000
-            );
-          }),
-        ]);
+        // One automatic retry — some videos abort the hidden browser on first try
+        const resolveOnce = () => resolveYouTubeStreamUrl(videoId);
+        const withTimeout = (p: Promise<string>, ms: number) =>
+          Promise.race([
+            p,
+            new Promise<string>((_, reject) => {
+              window.setTimeout(
+                () =>
+                  reject(
+                    new Error(
+                      'YouTube: таймаут. Нажми play ещё раз (SOCKS «весь трафик»).'
+                    )
+                  ),
+                ms
+              );
+            }),
+          ]);
+        let url: string;
+        try {
+          url = await withTimeout(resolveOnce(), 40_000);
+        } catch (e1) {
+          console.warn('[yt] resolve retry after', e1);
+          url = await withTimeout(resolveOnce(), 45_000);
+        }
         const isHls = url.includes('.m3u8') && !url.startsWith('miura-yt:');
         return { url, protocol: isHls ? ('hls' as const) : ('progressive' as const) };
       }

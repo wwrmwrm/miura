@@ -3850,10 +3850,14 @@ app.whenReady().then(async () => {
 
   /** Dedupe parallel IPC resolves for the same video id */
   const ytResolveInflight = new Map();
+  /** Short-lived successful resolves (avoid re-browser on replay) */
+  const ytResolveCache = new Map();
+  /** Serialize hidden-browser resolves (parallel windows → ERR_ABORTED) */
+  let ytBrowserQueue = Promise.resolve();
 
   /**
    * Resolve a playable audio URL in main process.
-   * Fast Innertube → browser (bot wall) → Piped/Invidious → HTML scrape.
+   * Browser intercept (primary) ∥ quick ANDROID → Piped → HTML scrape.
    */
   async function ytResolveAudioMain(videoId) {
     const id = String(videoId || '').trim();
@@ -4024,10 +4028,19 @@ app.whenReady().then(async () => {
       }
     }
 
-    // Quick official clients on proxy only (ANDROID often returns plain URLs when not bot-walled)
-    const quickClients = clients.filter((c) => c.key === 'ANDROID' || c.key === 'IOS');
+    // Short cache — same track replayed while seeking / double-click
+    const cached = ytResolveCache.get(id);
+    if (cached && cached.exp > Date.now() && cached.result?.ok && cached.result.url) {
+      console.log('[yt-resolve] cache hit', id);
+      return { ...cached.result, client: `${cached.result.client || 'cache'}/cached` };
+    }
+
     const proxySes = sessions[0];
-    for (const c of quickClients) {
+
+    // One quick ANDROID try (4s) in parallel with browser — rarely works, never blocks browser
+    const androidPromise = (async () => {
+      const c = clients.find((x) => x.key === 'ANDROID');
+      if (!c) return null;
       try {
         const body = {
           context: {
@@ -4045,12 +4058,10 @@ app.whenReady().then(async () => {
           contentCheckOk: true,
           racyCheckOk: true,
           playbackContext: {
-            contentPlaybackContext: {
-              html5Preference: 'HTML5_PREF_WANTS',
-            },
+            contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' },
           },
         };
-        const { status, data, len } = await fetchJson(
+        const { data, len } = await fetchJson(
           proxySes.ses,
           endpoints[0],
           {
@@ -4065,41 +4076,68 @@ app.whenReady().then(async () => {
             },
             body: JSON.stringify(body),
           },
-          8000
+          4000
         );
-        if (!data) {
-          errors.push(`proxy/${c.key}:http${status}-badjson`);
-          continue;
-        }
-        const pstat =
-          data.playabilityStatus?.status || data.playability_status?.status || '?';
-        const picked = pickUrl(data, `proxy/${c.key}`);
+        if (!data) return null;
+        const picked = pickUrl(data, 'proxy/ANDROID');
         if (picked) {
-          console.log(
-            '[yt-resolve] ok',
-            picked.via,
-            picked.protocol,
-            (picked.mime || '').slice(0, 36),
-            'len',
-            len
-          );
-          return { ok: true, ...picked, client: `proxy/${c.key}` };
+          console.log('[yt-resolve] ok ANDROID', picked.protocol, 'len', len);
+          return { ok: true, ...picked, client: 'proxy/ANDROID' };
         }
+        const pstat = data.playabilityStatus?.status || '?';
         const n =
           (data.streamingData?.adaptiveFormats || []).length +
           (data.streamingData?.formats || []).length;
-        errors.push(`proxy/${c.key}:${pstat}/fmt${n}/L${len}`);
-        console.log('[yt-resolve] miss', 'proxy', c.key, pstat, 'fmt', n, 'body', len);
+        errors.push(`proxy/ANDROID:${pstat}/fmt${n}`);
+        return null;
       } catch (e) {
-        errors.push(`proxy/${c.key}:${e?.message || e}`);
+        errors.push(`proxy/ANDROID:${e?.message || e}`);
+        return null;
       }
+    })();
+
+    // Primary path: real Chromium (serial queue + one retry on abort)
+    const browserPromise = (async () => {
+      let browserHit = await ytResolveViaHiddenBrowser(id);
+      if (
+        !browserHit?.ok &&
+        /ERR_ABORTED|timeout|aborted/i.test(String(browserHit?.error || ''))
+      ) {
+        console.log('[yt-resolve] browser retry after', browserHit?.error);
+        browserHit = await ytResolveViaHiddenBrowser(id);
+      }
+      return browserHit;
+    })();
+
+    // Whoever wins first with a URL
+    try {
+      const raced = await new Promise((resolve) => {
+        let done = false;
+        const finishRace = (r, via) => {
+          if (done || !r?.ok || !r.url) return;
+          done = true;
+          console.log('[yt-resolve] race win', via, r.client || r.protocol);
+          resolve(r);
+        };
+        androidPromise.then((r) => finishRace(r, 'android')).catch(() => {});
+        browserPromise.then((r) => finishRace(r, 'browser')).catch(() => {});
+        Promise.allSettled([androidPromise, browserPromise]).then(() => {
+          if (!done) resolve(null);
+        });
+      });
+      if (raced?.ok && raced.url) {
+        ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: raced });
+        return raced;
+      }
+    } catch (e) {
+      errors.push(`race:${e?.message || e}`);
     }
 
-    // Browser first when API is bot-walled — real Chromium often still gets googlevideo
+    // Collect browser error if race lost
     try {
-      const browserHit = await ytResolveViaHiddenBrowser(id);
+      const browserHit = await browserPromise;
       if (browserHit?.ok && browserHit.url) {
-        console.log('[yt-resolve] ok browser', browserHit.client, browserHit.protocol);
+        ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: browserHit });
         return browserHit;
       }
       if (browserHit?.error) errors.push(`browser:${browserHit.error}`);
@@ -4107,227 +4145,168 @@ app.whenReady().then(async () => {
       errors.push(`browser:${e?.message || e}`);
     }
 
-    // Piped public APIs (often bypass empty streamingData / LOGIN_REQUIRED)
+    // Piped — few instances in parallel (proxy only)
     const pipedBases = [
       'https://pipedapi.kavin.rocks',
       'https://api.piped.private.coffee',
       'https://pipedapi.adminforge.de',
-      'https://pipedapi.leptons.xyz',
-      'https://pipedapi.darkness.services',
       'https://pipedapi.r4fo.com',
-      'https://pipedapi.syncpundit.io',
     ];
-    for (const { label, ses } of sessions) {
+    const pipedHit = await new Promise((resolve) => {
+      let left = pipedBases.length;
+      let resolved = false;
       for (const base of pipedBases) {
-        try {
-          const { status, data, len } = await fetchJson(
-            ses,
-            `${base}/streams/${id}`,
-            {
-              method: 'GET',
-              headers: {
-                Accept: 'application/json',
-                'User-Agent': CHROME_UA,
-              },
-            },
-            10000
-          );
-          if (!data) {
-            errors.push(`${label}/piped:${base}:http${status}`);
-            continue;
-          }
-          const audio = Array.isArray(data.audioStreams) ? data.audioStreams : [];
-          const scored = audio
-            .filter((s) => s && typeof s.url === 'string' && s.url.startsWith('http'))
-            .map((s) => {
-              const mime = String(s.mimeType || s.format || '');
-              let score = Number(s.bitrate || 0) || 0;
-              if (/mp4|m4a|mp4a/i.test(mime) || /m4a/i.test(String(s.format || ''))) score += 1e6;
-              if (/opus|webm/i.test(mime)) score += 5e5;
-              return { url: String(s.url), mime, score };
-            })
-            .sort((a, b) => b.score - a.score);
-          if (scored[0]?.url) {
-            console.log('[yt-resolve] ok piped', base, scored[0].mime, 'len', len);
-            return {
-              ok: true,
-              url: scored[0].url,
-              mime: scored[0].mime || 'audio/mp4',
-              protocol: 'progressive',
-              client: `${label}/piped`,
-              via: base,
-            };
-          }
-          if (data.hls && String(data.hls).startsWith('http')) {
-            console.log('[yt-resolve] ok piped hls', base);
-            return {
-              ok: true,
-              url: String(data.hls),
-              mime: 'application/x-mpegURL',
-              protocol: 'hls',
-              client: `${label}/piped-hls`,
-              via: base,
-            };
-          }
-          errors.push(`${label}/piped:${new URL(base).hostname}:0`);
-        } catch (e) {
-          errors.push(`${label}/piped:${e?.message || e}`);
-        }
-      }
-    }
-
-    // Invidious instances
-    const invBases = [
-      'https://inv.nadeko.net',
-      'https://invidious.nerdvpn.de',
-      'https://yewtu.be',
-      'https://inv.tux.pizza',
-      'https://iv.ggtyler.dev',
-    ];
-    for (const { label, ses } of sessions) {
-      for (const base of invBases) {
-        try {
-          const { status, data } = await fetchJson(
-            ses,
-            `${base}/api/v1/videos/${id}`,
-            {
-              method: 'GET',
-              headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
-            },
-            10000
-          );
-          if (!data) {
-            errors.push(`${label}/inv:http${status}`);
-            continue;
-          }
-          const formats = [
-            ...(Array.isArray(data.adaptiveFormats) ? data.adaptiveFormats : []),
-            ...(Array.isArray(data.formatStreams) ? data.formatStreams : []),
-          ];
-          const audio = formats
-            .filter(
-              (f) =>
-                f &&
-                typeof f.url === 'string' &&
-                f.url.startsWith('http') &&
-                (/^audio\//i.test(String(f.type || f.mimeType || '')) ||
-                  /audio/i.test(String(f.type || '')))
-            )
-            .sort(
-              (a, b) =>
-                (Number(b.bitrate) || Number(b.audioSampleRate) || 0) -
-                (Number(a.bitrate) || Number(a.audioSampleRate) || 0)
-            );
-          if (audio[0]?.url) {
-            console.log('[yt-resolve] ok inv', base);
-            return {
-              ok: true,
-              url: String(audio[0].url),
-              mime: String(audio[0].type || audio[0].mimeType || 'audio/mp4'),
-              protocol: 'progressive',
-              client: `${label}/invidious`,
-              via: base,
-            };
-          }
-          if (data.hlsUrl && String(data.hlsUrl).startsWith('http')) {
-            return {
-              ok: true,
-              url: String(data.hlsUrl),
-              mime: 'application/x-mpegURL',
-              protocol: 'hls',
-              client: `${label}/invidious-hls`,
-              via: base,
-            };
-          }
-          errors.push(`${label}/inv:${new URL(base).hostname}:0`);
-        } catch (e) {
-          errors.push(`${label}/inv:${e?.message || e}`);
-        }
-      }
-    }
-
-    // Last resort: scrape watch/embed HTML for plain progressive URLs
-    for (const { label, ses } of sessions) {
-      for (const pageUrl of [
-        `https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`,
-        `https://www.youtube.com/embed/${id}`,
-      ]) {
-        try {
-          const doFetch =
-            typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 10000);
-          let html = '';
+        void (async () => {
           try {
-            const res = await doFetch(pageUrl, {
-              method: 'GET',
-              headers: {
-                'User-Agent': CHROME_UA,
-                'Accept-Language': 'en-US,en;q=0.9',
-                Referer: 'https://www.youtube.com/',
+            const { data, len } = await fetchJson(
+              proxySes.ses,
+              `${base}/streams/${id}`,
+              {
+                method: 'GET',
+                headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
               },
-              signal: ctrl.signal,
-            });
-            html = await res.text();
-          } finally {
-            clearTimeout(timer);
-          }
-          let data = null;
-          const patterns = [
-            /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s,
-            /var\s+ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s,
-          ];
-          for (const re of patterns) {
-            const m = html.match(re);
-            if (!m) continue;
-            try {
-              data = JSON.parse(m[1]);
-              break;
-            } catch {
-              /* try next */
+              7000
+            );
+            if (resolved) return;
+            if (!data) {
+              errors.push(`piped:${new URL(base).hostname}:empty`);
+              return;
             }
+            const audio = Array.isArray(data.audioStreams) ? data.audioStreams : [];
+            const scored = audio
+              .filter((s) => s && typeof s.url === 'string' && s.url.startsWith('http'))
+              .map((s) => {
+                const mime = String(s.mimeType || s.format || '');
+                let score = Number(s.bitrate || 0) || 0;
+                if (/mp4|m4a|mp4a/i.test(mime) || /m4a/i.test(String(s.format || ''))) {
+                  score += 1e6;
+                }
+                return { url: String(s.url), mime, score };
+              })
+              .sort((a, b) => b.score - a.score);
+            if (scored[0]?.url) {
+              resolved = true;
+              console.log('[yt-resolve] ok piped', base, scored[0].mime, 'len', len);
+              resolve({
+                ok: true,
+                url: scored[0].url,
+                mime: scored[0].mime || 'audio/mp4',
+                protocol: 'progressive',
+                client: 'proxy/piped',
+                via: base,
+              });
+              return;
+            }
+            if (data.hls && String(data.hls).startsWith('http')) {
+              resolved = true;
+              resolve({
+                ok: true,
+                url: String(data.hls),
+                mime: 'application/x-mpegURL',
+                protocol: 'hls',
+                client: 'proxy/piped-hls',
+                via: base,
+              });
+              return;
+            }
+            errors.push(`piped:${new URL(base).hostname}:0`);
+          } catch (e) {
+            errors.push(`piped:${e?.message || e}`);
+          } finally {
+            left -= 1;
+            if (left <= 0 && !resolved) resolve(null);
           }
-          if (!data) {
-            errors.push(`${label}/html:no-player-json`);
-            continue;
-          }
-          const pstat = data.playabilityStatus?.status || '?';
-          const picked = pickUrl(data, `${label}/html`);
-          if (picked) {
-            console.log('[yt-resolve] ok scrape', picked.via, picked.protocol);
-            return { ok: true, ...picked, client: `${label}/html` };
-          }
-          const n =
-            (data.streamingData?.adaptiveFormats || []).length +
-            (data.streamingData?.formats || []).length;
-          errors.push(`${label}/html:${pstat}/fmt${n}`);
-        } catch (e) {
-          errors.push(`${label}/html:${e?.message || e}`);
-        }
+        })();
       }
+    });
+    if (pipedHit?.ok) {
+      ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: pipedHit });
+      return pipedHit;
     }
 
-    const summary = errors.slice(0, 6).join(' · ') || 'no stream';
+    // Last resort: scrape watch HTML (proxy only, one page)
+    try {
+      const pageUrl = `https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`;
+      const doFetch =
+        typeof proxySes.ses.fetch === 'function'
+          ? proxySes.ses.fetch.bind(proxySes.ses)
+          : net.fetch.bind(net);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 9000);
+      let html = '';
+      try {
+        const res = await doFetch(pageUrl, {
+          method: 'GET',
+          headers: {
+            'User-Agent': CHROME_UA,
+            'Accept-Language': 'en-US,en;q=0.9',
+            Referer: 'https://www.youtube.com/',
+          },
+          signal: ctrl.signal,
+        });
+        html = await res.text();
+      } finally {
+        clearTimeout(timer);
+      }
+      let data = null;
+      const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s);
+      if (m) {
+        try {
+          data = JSON.parse(m[1]);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (data) {
+        const picked = pickUrl(data, 'proxy/html');
+        if (picked) {
+          console.log('[yt-resolve] ok scrape', picked.via, picked.protocol);
+          const hit = { ok: true, ...picked, client: 'proxy/html' };
+          ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: hit });
+          return hit;
+        }
+        const n =
+          (data.streamingData?.adaptiveFormats || []).length +
+          (data.streamingData?.formats || []).length;
+        errors.push(`html:${data.playabilityStatus?.status || '?'}/fmt${n}`);
+      } else {
+        errors.push('html:no-player-json');
+      }
+    } catch (e) {
+      errors.push(`html:${e?.message || e}`);
+    }
+
+    const summary = errors.slice(0, 5).join(' · ') || 'no stream';
     console.warn('[yt-resolve] failed', id, errors.slice(0, 8).join(' | '));
     return {
       ok: false,
-      error:
-        /LOGIN_REQUIRED|bot|Sign in|browser:/i.test(summary)
-          ? `YouTube блокирует поток (бот-проверка). Проверь SOCKS (режим «весь трафик»), что порт жив, и полностью перезапусти miura. ${summary}`
-          : `YouTube: нет аудио URL. ${summary}`,
+      error: /ERR_ABORTED|timeout|бот|LOGIN|browser:/i.test(summary)
+        ? `YouTube: не удалось открыть поток. Нажми play ещё раз. (${summary.slice(0, 120)})`
+        : `YouTube: нет потока. ${summary.slice(0, 160)}`,
     };
+  }
+
+  function ytResolveViaHiddenBrowser(videoId) {
+    const run = () => ytResolveViaHiddenBrowserImpl(videoId);
+    const p = ytBrowserQueue.then(run, run);
+    ytBrowserQueue = p.then(
+      () => undefined,
+      () => undefined
+    );
+    return p;
   }
 
   /**
    * Load watch page in a real Chromium window (same proxy as app),
    * extract player JSON and/or intercept googlevideo audio requests.
    */
-  function ytResolveViaHiddenBrowser(videoId) {
+  function ytResolveViaHiddenBrowserImpl(videoId) {
     const id = String(videoId || '').trim();
     return new Promise(async (resolve) => {
       let settled = false;
       let win = null;
-      const partition = `temp:yt-br-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // Warm cookies across resolves (faster than fresh temp: each time)
+      const partition = 'persist:miura-yt-resolve';
       const ses = session.fromPartition(partition);
       try {
         const cfg = readProxyConfig();

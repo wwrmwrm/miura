@@ -604,15 +604,18 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
   const id = String(videoId || '').trim();
   if (!id) throw new Error('YouTube: empty video id');
 
-  // 1) Main-process player (ANDROID/IOS/html scrape) — preferred, no cipher
+  // 1) Main process (browser intercept / Piped / scrape) — may return miura-yt:// proxy URL
   const mainResolve = typeof window !== 'undefined' ? window.electronAPI?.ytResolveAudio : undefined;
   let mainErr = '';
   if (mainResolve) {
     try {
       const r = await mainResolve(id);
-      if (r?.ok && r.url?.startsWith('http')) {
-        console.log('[yt] stream ok main', r.client, r.protocol);
-        return r.url;
+      const u = r?.url ? String(r.url) : '';
+      // CRITICAL: after wrap, URL is miura-yt://… — NOT https://
+      // Old check startsWith('http') discarded successful resolves → youtubei hang → «таймаут»
+      if (r?.ok && u && (/^https:\/\//i.test(u) || u.startsWith('miura-yt:'))) {
+        console.log('[yt] stream ok main', r.client, r.protocol, u.slice(0, 48));
+        return u;
       }
       mainErr = r?.error || 'main:no-url';
       console.warn('[yt] main resolve failed', mainErr);
@@ -624,36 +627,27 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     mainErr = 'no-ytResolveAudio-ipc';
   }
 
-  const yt = (await getTube()) as Tube & {
-    getBasicInfo: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
-    getInfo?: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
-    session?: { player?: YtPlayerLike };
-  };
-  const player = yt.session?.player;
-
-  // Main already tried multi-client + Piped + browser. Renderer only as short backup.
-  const clients = ['ANDROID', 'IOS', 'TV', 'WEB_EMBEDDED'] as const;
-  const errors: string[] = [];
-
-  for (const client of clients) {
-    try {
-      const info = (await yt.getBasicInfo(id, { client })) as YtInfoLike;
-      const url = await streamFromInfo(info, player, client);
-      if (url) return url;
-      const n =
-        (info.streaming_data?.formats?.length || 0) +
-        (info.streaming_data?.adaptive_formats?.length || 0);
-      errors.push(`${client}:0/${n}`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`${client}:${msg.slice(0, 60)}`);
-      console.warn('[yt] getBasicInfo', client, msg);
-    }
+  // Main already exhausted clients/browser/Piped. One short ANDROID attempt only.
+  try {
+    const yt = (await getTube()) as Tube & {
+      getBasicInfo: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
+      session?: { player?: YtPlayerLike };
+    };
+    const player = yt.session?.player;
+    const info = (await yt.getBasicInfo(id, { client: 'ANDROID' })) as YtInfoLike;
+    const url = await streamFromInfo(info, player, 'ANDROID-backup');
+    if (url) return url;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    mainErr = [mainErr, `backup:${msg.slice(0, 80)}`].filter(Boolean).join(' · ');
+    console.warn('[yt] backup', msg);
   }
 
-  const detail = [mainErr, ...errors].filter(Boolean).slice(0, 4).join(' · ');
   throw new Error(
-    `YouTube: нет потока (${detail || 'unknown'}). ` +
-      'Нужен рабочий SOCKS/VPN (Настройки → Сеть, режим «весь трафик»), затем «Сохранить и проверить» и полный перезапуск miura.'
+    mainErr && /таймаут|timeout|бот|LOGIN|SOCKS|прокси/i.test(mainErr)
+      ? mainErr.length > 220
+        ? `${mainErr.slice(0, 220)}…`
+        : mainErr
+      : `YouTube: нет потока. ${mainErr || 'unknown'} Попробуй ещё раз или другой трек.`
   );
 }
