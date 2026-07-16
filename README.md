@@ -1,6 +1,6 @@
 <div align="center">
 
-![miura — multi-source desktop music player](docs/banner-sakura.png)
+![miura — multi-source desktop music player](docs/banner-detail.png)
 
 <br/>
 
