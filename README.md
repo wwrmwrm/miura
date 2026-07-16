@@ -1,6 +1,6 @@
 <div align="center">
 
-![miura — multi-source desktop music player](docs/github-banner.svg)
+![miura — multi-source desktop music player](docs/banner-enso.png)
 
 <br/>
 
