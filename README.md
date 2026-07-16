@@ -10,7 +10,7 @@
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](./LICENSE)
-[![Platform](https://img.shields.io/badge/Win%20%7C%20macOS%20%7C%20Linux-0f172a?style=flat-square)](#run)
+[![Platform](https://img.shields.io/badge/Windows-primary-0f172a?style=flat-square&logo=windows&logoColor=white)](#platforms)
 
 ```bash
 git clone https://github.com/wwrmwrm/miura.git
@@ -37,9 +37,21 @@ cd miura && npm install && npm run dev
 
 ---
 
+## Platforms
+
+| OS | Status |
+|----|--------|
+| **Windows** | **Primary.** Developed and tested here. Installer / portable via `npm run dist:win`. |
+| **macOS** | *Not packaged or tested.* Electron code may run with `npm run dev`, but no support promise and no official build. |
+| **Linux** | Same as macOS — experimental only if you build from source yourself. |
+
+There are **no** `dist:mac` / `dist:linux` scripts and no CI for those platforms yet.
+
+---
+
 ## Run
 
-**Node.js 18+**
+**Node.js 18+** · recommended on **Windows**
 
 | Command | |
 |---------|--|
@@ -47,7 +59,7 @@ cd miura && npm install && npm run dev
 | `npm run build` | Renderer → `dist/` |
 | `npm start` | Electron on `dist/` |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm run dist:win` | NSIS + portable |
+| `npm run dist:win` | Windows NSIS + portable |
 
 ---
 
@@ -65,6 +77,7 @@ docs/         banners, Widevine notes
 
 ## Limits
 
+- **Windows-first** — see [Platforms](#platforms)
 - **SoundCloud DRM / Go+** — not supported by default ([details](docs/WIDEVINE.md))
 - **YouTube** — network-sensitive; SOCKS «all traffic» may help
 - Respect platform ToS and artists’ rights
