@@ -631,99 +631,29 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
   };
   const player = yt.session?.player;
 
-  // Valid InnerTubeClient names only (see youtubei Misc.d.ts)
-  const clients = [
-    'ANDROID',
-    'IOS',
-    'YTMUSIC_ANDROID',
-    'ANDROID_VR',
-    'TV',
-    'TV_EMBEDDED',
-    'TV_SIMPLY',
-    'MWEB',
-    'WEB_EMBEDDED',
-    'WEB',
-    undefined,
-  ] as const;
-
+  // Main already tried multi-client + Piped + browser. Renderer only as short backup.
+  const clients = ['ANDROID', 'IOS', 'TV', 'WEB_EMBEDDED'] as const;
   const errors: string[] = [];
 
   for (const client of clients) {
     try {
-      const info = (await yt.getBasicInfo(id, client ? { client } : undefined)) as YtInfoLike;
-      const url = await streamFromInfo(info, player, client || 'default');
+      const info = (await yt.getBasicInfo(id, { client })) as YtInfoLike;
+      const url = await streamFromInfo(info, player, client);
       if (url) return url;
       const n =
         (info.streaming_data?.formats?.length || 0) +
         (info.streaming_data?.adaptive_formats?.length || 0);
-      errors.push(`${client || 'default'}:0/${n}`);
+      errors.push(`${client}:0/${n}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`${client || 'default'}:${msg.slice(0, 60)}`);
+      errors.push(`${client}:${msg.slice(0, 60)}`);
       console.warn('[yt] getBasicInfo', client, msg);
     }
   }
 
-  if (typeof yt.getInfo === 'function') {
-    for (const client of ['ANDROID', 'IOS', 'TV', undefined] as const) {
-      try {
-        const info = (await yt.getInfo(id, client ? { client } : undefined)) as YtInfoLike;
-        const url = await streamFromInfo(info, player, `getInfo:${client || 'def'}`);
-        if (url) return url;
-      } catch (e) {
-        errors.push(`getInfo:${client}:${e instanceof Error ? e.message : e}`);
-      }
-    }
-  }
-
-  if (typeof yt.getStreamingData === 'function') {
-    for (const client of ['ANDROID', 'IOS', 'TV', undefined] as const) {
-      for (const opts of [
-        { type: 'audio' as const, quality: 'best', format: 'any', client },
-        { type: 'audio' as const, quality: 'best', format: 'mp4', client },
-        { type: 'video+audio' as const, quality: 'best', format: 'any', client },
-      ]) {
-        try {
-          const format = (await yt.getStreamingData(
-            id,
-            opts as { type: string; quality: string; format: string }
-          )) as YtFormatLike;
-          const url = await decipherFormat(format, player);
-          if (url?.startsWith('http')) {
-            console.log('[yt] stream ok getStreamingData', client || 'def', opts.type);
-            return url;
-          }
-        } catch (e) {
-          errors.push(`gsd:${client}:${e instanceof Error ? e.message : e}`);
-        }
-      }
-    }
-  }
-
-  innertubePromise = null;
-  try {
-    const yt2 = (await getTube()) as typeof yt;
-    const player2 = yt2.session?.player;
-    const info = (await yt2.getBasicInfo(id, { client: 'ANDROID' })) as YtInfoLike;
-    const url = await streamFromInfo(info, player2, 'retry-ANDROID');
-    if (url) return url;
-  } catch (e) {
-    errors.push(`retry:${e instanceof Error ? e.message : e}`);
-  }
-
-  // Main again after session reset
-  if (mainResolve) {
-    try {
-      const r = await mainResolve(id);
-      if (r?.ok && r.url?.startsWith('http')) return r.url;
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const detail = [mainErr, ...errors].filter(Boolean).slice(0, 5).join(' · ');
+  const detail = [mainErr, ...errors].filter(Boolean).slice(0, 4).join(' · ');
   throw new Error(
-    `YouTube: no playable audio URL (${detail || 'unknown'}). ` +
-      'Проверь прокси (Настройки → Сеть → Сохранить и проверить) и перезапусти miura.'
+    `YouTube: нет потока (${detail || 'unknown'}). ` +
+      'Нужен рабочий SOCKS/VPN (Настройки → Сеть, режим «весь трафик»), затем «Сохранить и проверить» и полный перезапуск miura.'
   );
 }

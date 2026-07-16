@@ -4785,8 +4785,22 @@ function PlayerBar({
     </div>
   );
 
+  const errText = error ? String(error) : '';
+  const subline = errText
+    ? errText
+    : state === 'loading'
+      ? 'загрузка…'
+      : stationMode
+        ? `станция · ${current?.user?.username ?? ''}`
+        : current?.user?.username ?? '—';
+
   return (
-    <footer className={`bar ${state === 'playing' ? 'is-playing' : ''}`}>
+    <footer className={`bar ${state === 'playing' ? 'is-playing' : ''} ${errText ? 'has-error' : ''}`}>
+      {errText ? (
+        <div className="bar-error-banner" role="alert" title={errText}>
+          {errText}
+        </div>
+      ) : null}
       <div className="bar-now">
         {current && onOpenTrack ? (
           <button type="button" className="bar-art-btn" onClick={onOpenTrack} title="Открыть трек">
@@ -4808,25 +4822,13 @@ function PlayerBar({
               {current && isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
             </div>
           )}
-          {current?.user && onOpenUser ? (
+          {current?.user && onOpenUser && !errText ? (
             <button type="button" className="aa btn-like" onClick={onOpenUser}>
-              {error && state === 'error'
-                ? error
-                : state === 'loading'
-                  ? '…'
-                  : stationMode
-                    ? `станция · ${current.user.username}`
-                    : current.user.username}
+              {subline}
             </button>
           ) : (
-            <div className="aa">
-              {error && state === 'error'
-                ? error
-                : state === 'loading'
-                  ? '…'
-                  : stationMode
-                    ? `станция · ${current?.user?.username ?? ''}`
-                    : current?.user?.username ?? '—'}
+            <div className={`aa ${errText ? 'is-err' : ''}`} title={errText || undefined}>
+              {subline}
             </div>
           )}
         </div>

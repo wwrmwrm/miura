@@ -411,12 +411,20 @@ export function usePlayer() {
         const onErr = () => {
           cleanup();
           const code = audio.error?.code;
+          const src = String(audio.currentSrc || audio.src || '');
+          const isYt = /googlevideo\.com|youtube\.com|piped|invidious/i.test(src);
           const msg =
             code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-              ? 'Формат не поддерживается (лучше MP3, M4A, FLAC, WAV, OGG). WMA — нет.'
+              ? isYt
+                ? 'YouTube: формат потока не поддерживается браузером (нужен m4a/mp4 audio).'
+                : 'Формат не поддерживается (лучше MP3, M4A, FLAC, WAV, OGG). WMA — нет.'
               : code === MediaError.MEDIA_ERR_NETWORK
-                ? 'Не удалось прочитать файл (путь / права / miura-file).'
-                : 'Ошибка загрузки аудио';
+                ? isYt
+                  ? 'YouTube: сеть/прокси отклонили поток (googlevideo 403?). Проверь SOCKS «весь трафик».'
+                  : 'Не удалось прочитать файл (путь / права / miura-file).'
+                : isYt
+                  ? 'YouTube: ошибка загрузки аудио потока'
+                  : 'Ошибка загрузки аудио';
           reject(new Error(msg));
         };
         audio.addEventListener('canplay', onOk, { once: true });
@@ -439,8 +447,16 @@ export function usePlayer() {
       if (!audio) return;
 
       const autoplay = opts?.autoplay !== false;
-      const skipOnFail = opts?.skipOnFail !== false;
       const startAt = opts?.startAt;
+      // YouTube / local: never silently skip — user must see the real error
+      const playableHint = getPlayable(track.id);
+      const stickySource =
+        playableHint?.source === 'youtube' ||
+        playableHint?.source === 'local' ||
+        track.genre === 'youtube' ||
+        track.genre === 'local';
+      const skipOnFail =
+        opts?.skipOnFail !== undefined ? opts.skipOnFail !== false : !stickySource;
 
       currentRef.current = track;
       setCurrent(track);
@@ -526,6 +542,7 @@ export function usePlayer() {
       } catch (e) {
         streamLoadedForIdRef.current = null;
         const msg = e instanceof Error ? e.message : 'Не удалось воспроизвести';
+        console.error('[player] load failed', track.title, msg);
         if (/429|rate limit|ограничил/i.test(msg)) {
           setState('error');
           setError(msg);
@@ -547,7 +564,7 @@ export function usePlayer() {
         const next = idx >= 0 ? q[idx + 1] : null;
         if (next && skipFailCountRef.current < 2) {
           skipFailCountRef.current += 1;
-          setError(`Пропуск: ${track.title || track.id}`);
+          setError(`Пропуск: ${track.title || track.id} — ${msg}`);
           void loadAndPlayRef.current(next);
           return;
         }
@@ -740,7 +757,21 @@ export function usePlayer() {
       }
       if (p.source === 'youtube') {
         const videoId = String(p.meta?.videoId || p.uid.replace(/^yt:/, ''));
-        const url = await resolveYouTubeStreamUrl(videoId);
+        // Hard cap so UI never sits on "…" forever without an error
+        const url = await Promise.race([
+          resolveYouTubeStreamUrl(videoId),
+          new Promise<string>((_, reject) => {
+            window.setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    'YouTube: таймаут 45с. Проверь прокси (весь трафик) и что VPN/SOCKS жив, затем перезапусти miura.'
+                  )
+                ),
+              45_000
+            );
+          }),
+        ]);
         const isHls = url.includes('.m3u8');
         return { url, protocol: isHls ? ('hls' as const) : ('progressive' as const) };
       }

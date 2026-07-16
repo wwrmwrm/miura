@@ -246,12 +246,21 @@ function installCaptureHooksOnSession(ses) {
       '*://secure.soundcloud.com/*',
       '*://api-auth.soundcloud.com/*',
       '*://*.soundcloud.cloud/*',
+      // YouTube media in <audio> needs YT referer or googlevideo 403s
+      '*://*.googlevideo.com/*',
+      '*://*.youtube.com/*',
+      '*://*.ytimg.com/*',
     ],
   };
 
   ses.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    const u = String(details.url || '');
+    const isYtMedia =
+      /googlevideo\.com/i.test(u) ||
+      (/youtube\.com/i.test(u) && /videoplayback|\/api\/timedtext/i.test(u));
+
     // During login: only OBSERVE headers — don't rewrite Origin/Referer (triggers bot walls)
-    if (capture.loginActive) {
+    if (capture.loginActive && !isYtMedia) {
       const auth = details.requestHeaders?.Authorization || details.requestHeaders?.authorization;
       if (auth) {
         const m = String(auth).match(/OAuth\s+([A-Za-z0-9._~\-+/=]+)/i);
@@ -263,8 +272,14 @@ function installCaptureHooksOnSession(ses) {
       return;
     }
 
-    // Normal playback: soft referer only if missing
-    if (!details.requestHeaders['Referer'] && !details.requestHeaders['referer']) {
+    if (isYtMedia) {
+      details.requestHeaders['Referer'] = 'https://www.youtube.com/';
+      details.requestHeaders['Origin'] = 'https://www.youtube.com';
+      if (!details.requestHeaders['User-Agent'] && !details.requestHeaders['user-agent']) {
+        details.requestHeaders['User-Agent'] = CHROME_UA;
+      }
+    } else if (!details.requestHeaders['Referer'] && !details.requestHeaders['referer']) {
+      // Normal SC playback: soft referer only if missing
       details.requestHeaders['Referer'] = 'https://soundcloud.com/';
     }
     callback({ requestHeaders: details.requestHeaders });
@@ -3727,15 +3742,29 @@ app.whenReady().then(async () => {
     );
   }
 
+  /** Dedupe parallel IPC resolves for the same video id */
+  const ytResolveInflight = new Map();
+
   /**
    * Resolve a playable audio URL in main process.
-   * Tries ANDROID/IOS player (plain URLs), both proxy+direct sessions, then watch-page scrape.
+   * Fast Innertube → browser (bot wall) → Piped/Invidious → HTML scrape.
    */
   async function ytResolveAudioMain(videoId) {
     const id = String(videoId || '').trim();
     if (!/^[a-zA-Z0-9_-]{6,}$/.test(id)) {
       return { ok: false, error: 'bad video id' };
     }
+    if (ytResolveInflight.has(id)) {
+      return ytResolveInflight.get(id);
+    }
+    const p = ytResolveAudioMainImpl(id).finally(() => {
+      ytResolveInflight.delete(id);
+    });
+    ytResolveInflight.set(id, p);
+    return p;
+  }
+
+  async function ytResolveAudioMainImpl(id) {
 
     const pickUrl = (data, label) => {
       const sd = data?.streamingData || data?.streaming_data;
@@ -3852,88 +3881,249 @@ app.whenReady().then(async () => {
 
     const errors = [];
 
-    async function fetchJson(ses, url, init) {
+    async function fetchJson(ses, url, init, timeoutMs = 9000) {
       const doFetch =
         typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-      const res = await doFetch(url, init);
-      const text = await res.text();
-      let data = null;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
       try {
-        data = JSON.parse(text);
-      } catch {
-        /* ignore */
+        const res = await doFetch(url, ctrl ? { ...init, signal: ctrl.signal } : init);
+        const text = await res.text();
+        let data = null;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          /* ignore */
+        }
+        return { status: res.status, data, len: text.length };
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      return { status: res.status, data, len: text.length };
     }
 
+    // Quick official clients on proxy only (ANDROID often returns plain URLs when not bot-walled)
+    const quickClients = clients.filter((c) => c.key === 'ANDROID' || c.key === 'IOS');
+    const proxySes = sessions[0];
+    for (const c of quickClients) {
+      try {
+        const body = {
+          context: {
+            client: {
+              clientName: c.clientName,
+              clientVersion: c.clientVersion,
+              hl: 'en',
+              gl: 'US',
+              timeZone: 'UTC',
+              utcOffsetMinutes: 0,
+              ...c.extra,
+            },
+          },
+          videoId: id,
+          contentCheckOk: true,
+          racyCheckOk: true,
+          playbackContext: {
+            contentPlaybackContext: {
+              html5Preference: 'HTML5_PREF_WANTS',
+            },
+          },
+        };
+        const { status, data, len } = await fetchJson(
+          proxySes.ses,
+          endpoints[0],
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': c.ua,
+              'X-YouTube-Client-Name': c.clientId,
+              'X-YouTube-Client-Version': c.clientVersion,
+              Origin: 'https://www.youtube.com',
+              Referer: `https://www.youtube.com/watch?v=${id}`,
+            },
+            body: JSON.stringify(body),
+          },
+          8000
+        );
+        if (!data) {
+          errors.push(`proxy/${c.key}:http${status}-badjson`);
+          continue;
+        }
+        const pstat =
+          data.playabilityStatus?.status || data.playability_status?.status || '?';
+        const picked = pickUrl(data, `proxy/${c.key}`);
+        if (picked) {
+          console.log(
+            '[yt-resolve] ok',
+            picked.via,
+            picked.protocol,
+            (picked.mime || '').slice(0, 36),
+            'len',
+            len
+          );
+          return { ok: true, ...picked, client: `proxy/${c.key}` };
+        }
+        const n =
+          (data.streamingData?.adaptiveFormats || []).length +
+          (data.streamingData?.formats || []).length;
+        errors.push(`proxy/${c.key}:${pstat}/fmt${n}/L${len}`);
+        console.log('[yt-resolve] miss', 'proxy', c.key, pstat, 'fmt', n, 'body', len);
+      } catch (e) {
+        errors.push(`proxy/${c.key}:${e?.message || e}`);
+      }
+    }
+
+    // Browser first when API is bot-walled — real Chromium often still gets googlevideo
+    try {
+      const browserHit = await ytResolveViaHiddenBrowser(id);
+      if (browserHit?.ok && browserHit.url) {
+        console.log('[yt-resolve] ok browser', browserHit.client, browserHit.protocol);
+        return browserHit;
+      }
+      if (browserHit?.error) errors.push(`browser:${browserHit.error}`);
+    } catch (e) {
+      errors.push(`browser:${e?.message || e}`);
+    }
+
+    // Piped public APIs (often bypass empty streamingData / LOGIN_REQUIRED)
+    const pipedBases = [
+      'https://pipedapi.kavin.rocks',
+      'https://api.piped.private.coffee',
+      'https://pipedapi.adminforge.de',
+      'https://pipedapi.leptons.xyz',
+      'https://pipedapi.darkness.services',
+      'https://pipedapi.r4fo.com',
+      'https://pipedapi.syncpundit.io',
+    ];
     for (const { label, ses } of sessions) {
-      for (const c of clients) {
-        for (const endpoint of endpoints) {
-          try {
-            const body = {
-              context: {
-                client: {
-                  clientName: c.clientName,
-                  clientVersion: c.clientVersion,
-                  hl: 'en',
-                  gl: 'US',
-                  timeZone: 'UTC',
-                  utcOffsetMinutes: 0,
-                  ...c.extra,
-                },
-              },
-              videoId: id,
-              contentCheckOk: true,
-              racyCheckOk: true,
-              playbackContext: {
-                contentPlaybackContext: {
-                  html5Preference: 'HTML5_PREF_WANTS',
-                },
-              },
-            };
-            const { status, data, len } = await fetchJson(ses, endpoint, {
-              method: 'POST',
+      for (const base of pipedBases) {
+        try {
+          const { status, data, len } = await fetchJson(
+            ses,
+            `${base}/streams/${id}`,
+            {
+              method: 'GET',
               headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': c.ua,
-                'X-YouTube-Client-Name': c.clientId,
-                'X-YouTube-Client-Version': c.clientVersion,
-                Origin: 'https://www.youtube.com',
-                Referer: `https://www.youtube.com/watch?v=${id}`,
+                Accept: 'application/json',
+                'User-Agent': CHROME_UA,
               },
-              body: JSON.stringify(body),
-            });
-            if (!data) {
-              errors.push(`${label}/${c.key}:http${status}-badjson`);
-              continue;
-            }
-            const pstat =
-              data.playabilityStatus?.status || data.playability_status?.status || '?';
-            const picked = pickUrl(data, `${label}/${c.key}`);
-            if (picked) {
-              console.log(
-                '[yt-resolve] ok',
-                picked.via,
-                picked.protocol,
-                (picked.mime || '').slice(0, 36),
-                'len',
-                len
-              );
-              return { ok: true, ...picked, client: `${label}/${c.key}` };
-            }
-            const n =
-              (data.streamingData?.adaptiveFormats || []).length +
-              (data.streamingData?.formats || []).length;
-            errors.push(`${label}/${c.key}:${pstat}/fmt${n}/L${len}`);
-            console.log('[yt-resolve] miss', label, c.key, pstat, 'fmt', n, 'body', len);
-          } catch (e) {
-            errors.push(`${label}/${c.key}:${e?.message || e}`);
+            },
+            10000
+          );
+          if (!data) {
+            errors.push(`${label}/piped:${base}:http${status}`);
+            continue;
           }
+          const audio = Array.isArray(data.audioStreams) ? data.audioStreams : [];
+          const scored = audio
+            .filter((s) => s && typeof s.url === 'string' && s.url.startsWith('http'))
+            .map((s) => {
+              const mime = String(s.mimeType || s.format || '');
+              let score = Number(s.bitrate || 0) || 0;
+              if (/mp4|m4a|mp4a/i.test(mime) || /m4a/i.test(String(s.format || ''))) score += 1e6;
+              if (/opus|webm/i.test(mime)) score += 5e5;
+              return { url: String(s.url), mime, score };
+            })
+            .sort((a, b) => b.score - a.score);
+          if (scored[0]?.url) {
+            console.log('[yt-resolve] ok piped', base, scored[0].mime, 'len', len);
+            return {
+              ok: true,
+              url: scored[0].url,
+              mime: scored[0].mime || 'audio/mp4',
+              protocol: 'progressive',
+              client: `${label}/piped`,
+              via: base,
+            };
+          }
+          if (data.hls && String(data.hls).startsWith('http')) {
+            console.log('[yt-resolve] ok piped hls', base);
+            return {
+              ok: true,
+              url: String(data.hls),
+              mime: 'application/x-mpegURL',
+              protocol: 'hls',
+              client: `${label}/piped-hls`,
+              via: base,
+            };
+          }
+          errors.push(`${label}/piped:${new URL(base).hostname}:0`);
+        } catch (e) {
+          errors.push(`${label}/piped:${e?.message || e}`);
         }
       }
     }
 
-    // Fallback: scrape ytInitialPlayerResponse from watch / embed HTML
+    // Invidious instances
+    const invBases = [
+      'https://inv.nadeko.net',
+      'https://invidious.nerdvpn.de',
+      'https://yewtu.be',
+      'https://inv.tux.pizza',
+      'https://iv.ggtyler.dev',
+    ];
+    for (const { label, ses } of sessions) {
+      for (const base of invBases) {
+        try {
+          const { status, data } = await fetchJson(
+            ses,
+            `${base}/api/v1/videos/${id}`,
+            {
+              method: 'GET',
+              headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
+            },
+            10000
+          );
+          if (!data) {
+            errors.push(`${label}/inv:http${status}`);
+            continue;
+          }
+          const formats = [
+            ...(Array.isArray(data.adaptiveFormats) ? data.adaptiveFormats : []),
+            ...(Array.isArray(data.formatStreams) ? data.formatStreams : []),
+          ];
+          const audio = formats
+            .filter(
+              (f) =>
+                f &&
+                typeof f.url === 'string' &&
+                f.url.startsWith('http') &&
+                (/^audio\//i.test(String(f.type || f.mimeType || '')) ||
+                  /audio/i.test(String(f.type || '')))
+            )
+            .sort(
+              (a, b) =>
+                (Number(b.bitrate) || Number(b.audioSampleRate) || 0) -
+                (Number(a.bitrate) || Number(a.audioSampleRate) || 0)
+            );
+          if (audio[0]?.url) {
+            console.log('[yt-resolve] ok inv', base);
+            return {
+              ok: true,
+              url: String(audio[0].url),
+              mime: String(audio[0].type || audio[0].mimeType || 'audio/mp4'),
+              protocol: 'progressive',
+              client: `${label}/invidious`,
+              via: base,
+            };
+          }
+          if (data.hlsUrl && String(data.hlsUrl).startsWith('http')) {
+            return {
+              ok: true,
+              url: String(data.hlsUrl),
+              mime: 'application/x-mpegURL',
+              protocol: 'hls',
+              client: `${label}/invidious-hls`,
+              via: base,
+            };
+          }
+          errors.push(`${label}/inv:${new URL(base).hostname}:0`);
+        } catch (e) {
+          errors.push(`${label}/inv:${e?.message || e}`);
+        }
+      }
+    }
+
+    // Last resort: scrape watch/embed HTML for plain progressive URLs
     for (const { label, ses } of sessions) {
       for (const pageUrl of [
         `https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`,
@@ -3942,15 +4132,23 @@ app.whenReady().then(async () => {
         try {
           const doFetch =
             typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-          const res = await doFetch(pageUrl, {
-            method: 'GET',
-            headers: {
-              'User-Agent': CHROME_UA,
-              'Accept-Language': 'en-US,en;q=0.9',
-              Referer: 'https://www.youtube.com/',
-            },
-          });
-          const html = await res.text();
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 10000);
+          let html = '';
+          try {
+            const res = await doFetch(pageUrl, {
+              method: 'GET',
+              headers: {
+                'User-Agent': CHROME_UA,
+                'Accept-Language': 'en-US,en;q=0.9',
+                Referer: 'https://www.youtube.com/',
+              },
+              signal: ctrl.signal,
+            });
+            html = await res.text();
+          } finally {
+            clearTimeout(timer);
+          }
           let data = null;
           const patterns = [
             /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s,
@@ -3966,21 +4164,11 @@ app.whenReady().then(async () => {
               /* try next */
             }
           }
-          // Sometimes embedded as JSON string in ytcfg
-          if (!data) {
-            const m2 = html.match(/"player_response":"(\{.+?\})"/);
-            if (m2) {
-              try {
-                data = JSON.parse(m2[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
-              } catch {
-                /* ignore */
-              }
-            }
-          }
           if (!data) {
             errors.push(`${label}/html:no-player-json`);
             continue;
           }
+          const pstat = data.playabilityStatus?.status || '?';
           const picked = pickUrl(data, `${label}/html`);
           if (picked) {
             console.log('[yt-resolve] ok scrape', picked.via, picked.protocol);
@@ -3989,15 +4177,237 @@ app.whenReady().then(async () => {
           const n =
             (data.streamingData?.adaptiveFormats || []).length +
             (data.streamingData?.formats || []).length;
-          errors.push(`${label}/html:fmt${n}`);
+          errors.push(`${label}/html:${pstat}/fmt${n}`);
         } catch (e) {
           errors.push(`${label}/html:${e?.message || e}`);
         }
       }
     }
 
+    const summary = errors.slice(0, 6).join(' · ') || 'no stream';
     console.warn('[yt-resolve] failed', id, errors.slice(0, 8).join(' | '));
-    return { ok: false, error: errors.slice(0, 8).join(' · ') || 'no stream' };
+    return {
+      ok: false,
+      error:
+        /LOGIN_REQUIRED|bot|Sign in|browser:/i.test(summary)
+          ? `YouTube блокирует поток (бот-проверка). Проверь SOCKS (режим «весь трафик»), что порт жив, и полностью перезапусти miura. ${summary}`
+          : `YouTube: нет аудио URL. ${summary}`,
+    };
+  }
+
+  /**
+   * Load watch page in a real Chromium window (same proxy as app),
+   * extract player JSON and/or intercept googlevideo audio requests.
+   */
+  function ytResolveViaHiddenBrowser(videoId) {
+    const id = String(videoId || '').trim();
+    return new Promise(async (resolve) => {
+      let settled = false;
+      let win = null;
+      const partition = `temp:yt-br-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ses = session.fromPartition(partition);
+      try {
+        const cfg = readProxyConfig();
+        await applyProxyToSession(ses, cfg);
+      } catch (e) {
+        console.warn('[yt-resolve] browser proxy', e);
+      }
+      try {
+        ses.setUserAgent(CHROME_UA);
+      } catch {
+        /* ignore */
+      }
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          ses.webRequest.onBeforeRequest(null);
+        } catch {
+          /* ignore */
+        }
+        try {
+          if (win && !win.isDestroyed()) win.destroy();
+        } catch {
+          /* ignore */
+        }
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => {
+        finish({ ok: false, error: 'timeout 28s (бот-стена или прокси медленный)' });
+      }, 28000);
+
+      const looksLikeAudio = (u) => {
+        if (!u || !/googlevideo\.com/i.test(u)) return false;
+        if (/mime=audio/i.test(u)) return true;
+        if (/[/&?]itag=(139|140|141|249|250|251|256|258)(?:[&/]|$)/.test(u)) return true;
+        if (/[/&?]itag=(18|22)(?:[&/]|$)/.test(u)) return true; // progressive muxed
+        return false;
+      };
+
+      const cleanMediaUrl = (u) => {
+        try {
+          const url = new URL(u);
+          // Keep signature params; drop range chunks so full track can play
+          url.searchParams.delete('range');
+          url.searchParams.delete('rn');
+          url.searchParams.delete('rbuf');
+          return url.toString();
+        } catch {
+          return String(u).replace(/&range=\d+-\d+/g, '').replace(/&rn=\d+/g, '');
+        }
+      };
+
+      try {
+        ses.webRequest.onBeforeRequest({ urls: ['*://*.googlevideo.com/*'] }, (details, cb) => {
+          try {
+            if (!settled && looksLikeAudio(details.url)) {
+              const url = cleanMediaUrl(details.url);
+              console.log('[yt-resolve] browser intercept', url.slice(0, 80));
+              finish({
+                ok: true,
+                url,
+                mime: /mime=audio%2Fwebm|mime=audio\/webm/i.test(details.url)
+                  ? 'audio/webm'
+                  : 'audio/mp4',
+                protocol: 'progressive',
+                client: 'browser-intercept',
+              });
+            }
+          } catch {
+            /* ignore */
+          }
+          cb({});
+        });
+      } catch (e) {
+        finish({ ok: false, error: `webRequest:${e?.message || e}` });
+        return;
+      }
+
+      try {
+        win = new BrowserWindow({
+          show: false,
+          width: 1280,
+          height: 720,
+          webPreferences: {
+            session: ses,
+            nodeIntegration: false,
+            contextIsolation: true,
+            backgroundThrottling: false,
+            sandbox: true,
+          },
+        });
+        try {
+          win.webContents.setAudioMuted(true);
+        } catch {
+          /* ignore */
+        }
+
+        win.webContents.on('did-fail-load', (_e, code, desc) => {
+          if (!settled && code !== -3) {
+            // -3 = aborted
+            console.warn('[yt-resolve] browser fail-load', code, desc);
+          }
+        });
+
+        win.webContents.on('did-finish-load', () => {
+          void (async () => {
+            if (settled) return;
+            try {
+              const extracted = await win.webContents.executeJavaScript(`
+                (function () {
+                  try {
+                    var pr = window.ytInitialPlayerResponse;
+                    if (!pr && window.ytplayer && window.ytplayer.config && window.ytplayer.config.args) {
+                      try {
+                        pr = JSON.parse(window.ytplayer.config.args.player_response || 'null');
+                      } catch (e) {}
+                    }
+                    if (!pr) return { ok: false, err: 'no-pr' };
+                    var sd = pr.streamingData || {};
+                    var formats = [].concat(sd.adaptiveFormats || [], sd.formats || []);
+                    var withUrl = formats.filter(function (f) { return f && f.url; });
+                    var audio = withUrl.filter(function (f) {
+                      var m = String(f.mimeType || '');
+                      return /audio/i.test(m) && !/^video\\//i.test(m);
+                    });
+                    audio.sort(function (a, b) {
+                      return (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0);
+                    });
+                    var pick = audio[0] || withUrl[0] || null;
+                    var hls = sd.hlsManifestUrl || sd.hls_manifest_url || null;
+                    return {
+                      ok: !!(pick && pick.url) || !!(hls && String(hls).indexOf('http') === 0),
+                      url: pick && pick.url ? pick.url : hls,
+                      mime: pick && pick.mimeType ? pick.mimeType : (hls ? 'application/x-mpegURL' : ''),
+                      status: pr.playabilityStatus && pr.playabilityStatus.status,
+                      reason: pr.playabilityStatus && (pr.playabilityStatus.reason || (pr.playabilityStatus.errorScreen && pr.playabilityStatus.status)),
+                      n: formats.length,
+                      nUrl: withUrl.length,
+                      hls: !!hls,
+                    };
+                  } catch (e) {
+                    return { ok: false, err: String(e && e.message || e) };
+                  }
+                })()
+              `);
+              if (extracted?.ok && extracted.url && String(extracted.url).startsWith('http')) {
+                finish({
+                  ok: true,
+                  url: String(extracted.url),
+                  mime: extracted.mime || 'audio/mp4',
+                  protocol: /m3u8|mpegURL/i.test(extracted.mime || extracted.url)
+                    ? 'hls'
+                    : 'progressive',
+                  client: 'browser-pr',
+                });
+                return;
+              }
+              if (extracted?.status) {
+                console.log(
+                  '[yt-resolve] browser pr',
+                  extracted.status,
+                  extracted.reason || '',
+                  'fmt',
+                  extracted.n,
+                  'url',
+                  extracted.nUrl
+                );
+              }
+              // Trigger media requests
+              await win.webContents.executeJavaScript(`
+                (function () {
+                  try {
+                    var v = document.querySelector('video');
+                    if (v) {
+                      v.muted = true;
+                      v.currentTime = 0;
+                      var p = v.play();
+                      if (p && p.catch) p.catch(function () {});
+                      return 'video';
+                    }
+                    var btn = document.querySelector('button.ytp-large-play-button, button.ytp-play-button, button[aria-label*="Play"]');
+                    if (btn) { btn.click(); return 'click'; }
+                    return 'none';
+                  } catch (e) { return 'err'; }
+                })()
+              `);
+            } catch (e) {
+              console.warn('[yt-resolve] browser extract', e?.message || e);
+            }
+          })();
+        });
+
+        await win.loadURL(`https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`, {
+          userAgent: CHROME_UA,
+          httpReferrer: 'https://www.youtube.com/',
+        });
+      } catch (e) {
+        finish({ ok: false, error: e?.message || String(e) });
+      }
+    });
   }
 
   ipcMain.handle('yt-resolve-audio', async (_e, videoId) => {

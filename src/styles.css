@@ -3679,6 +3679,31 @@ button {
   pointer-events: none;
 }
 
+.bar-error-banner {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 50;
+  max-height: 72px;
+  overflow: auto;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #f87171 45%, var(--line));
+  background: color-mix(in srgb, #7f1d1d 72%, var(--panel));
+  color: #fecaca;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: auto;
+}
+
+.bar-now .aa.is-err {
+  color: #fca5a5;
+}
+
 .bar.is-playing::before {
   opacity: 0.45;
   height: 1px;
