@@ -294,6 +294,8 @@ interface Window {
       currentTime?: number;
       error?: string;
       via?: string;
+      needsClick?: boolean;
+      paused?: boolean;
     }>;
     ytEmbedCommand: (payload: {
       cmd: 'play' | 'pause' | 'seek' | 'volume' | 'status' | 'stop';

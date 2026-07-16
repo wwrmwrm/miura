@@ -528,13 +528,29 @@ export function usePlayer() {
                 : 0;
           pendingSeekRef.current = 0;
 
-          const r = await window.electronAPI.ytEmbedPlay({
-            videoId,
-            volume: mutedRef.current ? 0 : volumeRef.current,
-            startAt: seekTo,
-          });
+          const r = await Promise.race([
+            window.electronAPI.ytEmbedPlay({
+              videoId,
+              volume: mutedRef.current ? 0 : volumeRef.current,
+              startAt: seekTo,
+            }),
+            new Promise<{ ok: false; error: string }>((resolve) => {
+              window.setTimeout(
+                () =>
+                  resolve({
+                    ok: false,
+                    error:
+                      'YouTube: таймаут загрузки. Проверь SOCKS «весь трафик» и нажми play ещё раз.',
+                  }),
+                38_000
+              );
+            }),
+          ]);
           if (!r?.ok) {
             throw new Error(r?.error || 'YouTube: не удалось запустить плеер');
+          }
+          if (r && 'needsClick' in r && (r as { needsClick?: boolean }).needsClick) {
+            console.warn('[yt] embed needs click in mini window');
           }
 
           ytEmbedActiveRef.current = true;
