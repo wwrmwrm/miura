@@ -86,10 +86,6 @@ function isYouTubeUrl(url: string): boolean {
   }
 }
 
-/**
- * Fetch for youtubei.js — ALWAYS via Electron main (proxy session).
- * Renderer fetch to YouTube dies with CORS / "Failed to fetch".
- */
 const safeFetch: typeof fetch = async (input, init) => {
   const req = input instanceof Request ? input : null;
   const url =
@@ -105,7 +101,6 @@ const safeFetch: typeof fetch = async (input, init) => {
     ...headersToRecord(req?.headers),
     ...headersToRecord(init?.headers),
   };
-  // Chromium forbids setting these on Request; strip so IPC doesn't get confused
   for (const k of Object.keys(headers)) {
     if (/^(host|connection|content-length|transfer-encoding|keep-alive)$/i.test(k)) {
       delete headers[k];
@@ -119,7 +114,7 @@ const safeFetch: typeof fetch = async (input, init) => {
     try {
       payloadBody = await bodyToPayload(await req.clone().arrayBuffer());
     } catch {
-      /* no body */
+
     }
   }
 
@@ -134,7 +129,6 @@ const safeFetch: typeof fetch = async (input, init) => {
     throw new Error(`YouTube: only https URLs supported (${url.slice(0, 80)})`);
   }
 
-  // Non-YT absolute URLs (rare) — still go through main if allowed, else error
   if (!isYouTubeUrl(url) && !/google|gstatic|ytimg|ggpht/i.test(url)) {
     throw new Error(`YouTube client blocked non-YT URL: ${url.slice(0, 100)}`);
   }
@@ -185,11 +179,6 @@ type Tube = {
   session?: { player?: unknown };
 };
 
-/**
- * youtubei.js needs a JS interpreter to decipher signed stream URLs.
- * Default shim throws; we run the extracted player snippet via Function.
- * (Requires CSP script-src 'unsafe-eval' — already set for this Electron app.)
- */
 function installYtEval(Platform: {
   shim?: {
     fetch?: typeof fetch;
@@ -202,12 +191,10 @@ function installYtEval(Platform: {
   shim.eval = (data, env) => {
     const code = String(data?.output || '');
     if (!code.trim()) throw new Error('YouTube: empty decipher script');
-    // data.output already includes process(...) return; env has n/sig/sp when needed
     try {
       // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
       const result = new Function('env', `${code}`)(env || {});
       if (result == null || typeof result !== 'object') {
-        // fallback without env binding
         // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
         const r2 = new Function(code)();
         if (r2 == null || typeof r2 !== 'object') {
@@ -217,7 +204,6 @@ function installYtEval(Platform: {
       }
       return result as Record<string, unknown>;
     } catch (e) {
-      // Last resort: raw eval of body
       // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
       const r2 = new Function(code)();
       if (r2 == null || typeof r2 !== 'object') {
@@ -251,7 +237,6 @@ function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 }
 
-/** Reliable cover CDN (no referrer issues if img uses referrerPolicy=no-referrer). */
 export function ytArtworkUrl(videoId: string, quality: 'hq' | 'mq' | 'sd' | 'max' = 'hq'): string {
   const id = String(videoId || '').trim();
   if (!id) return '';
@@ -293,12 +278,10 @@ function textOf(v: unknown): string {
 }
 
 function pickThumbnail(it: Record<string, unknown>, videoId: string): string {
-  // Prefer built-in ytimg — always works, no broken "[object Object]" from youtubei nodes
   const fallback = ytArtworkUrl(videoId, 'hq');
 
   const thumbs = it.thumbnails;
   if (Array.isArray(thumbs) && thumbs.length) {
-    // last entry is usually largest
     for (let i = thumbs.length - 1; i >= 0; i--) {
       const u = httpUrl(thumbs[i]);
       if (u) return u;
@@ -361,7 +344,6 @@ export async function searchYouTube(query: string, limit = 24): Promise<YtSearch
     if (out.length >= limit) break;
   }
 
-  // Fallback parse if structured results empty
   if (!out.length && Array.isArray(results)) {
     for (const item of results) {
       try {
@@ -384,7 +366,7 @@ export async function searchYouTube(query: string, limit = 24): Promise<YtSearch
         });
         if (out.length >= limit) break;
       } catch {
-        /* skip */
+
       }
     }
   }
@@ -451,21 +433,18 @@ async function decipherFormat(
   f: YtFormatLike,
   player: YtPlayerLike | undefined
 ): Promise<string | null> {
-  // Already open URL (common on ANDROID/IOS clients)
   if (typeof f.url === 'string' && f.url.startsWith('http') && !f.signature_cipher && !f.cipher) {
-    // Still may need nsig transform when `n=` present
     if (player?.decipher && /[?&]n=/.test(f.url)) {
       try {
         const u = await player.decipher(f.url, undefined, undefined);
         if (u?.startsWith('http')) return u;
       } catch {
-        /* use raw */
+
       }
     }
     return f.url;
   }
 
-  // Manual signatureCipher parse: s=...&sp=sig&url=https%3A%2F%2F...
   const cipherRaw = f.signature_cipher || f.cipher;
   if (typeof cipherRaw === 'string' && cipherRaw.includes('url=')) {
     try {
@@ -475,10 +454,9 @@ async function decipherFormat(
         const u = await player.decipher(undefined, cipherRaw, undefined);
         if (u?.startsWith('http')) return u;
       }
-      // Without player: only works if s is already applied (rare)
       if (base?.startsWith('http') && !params.get('s')) return base;
     } catch {
-      /* fall through */
+
     }
   }
 
@@ -517,7 +495,6 @@ function rankFormat(f: YtFormatLike): number {
   let s = Number(f.bitrate || 0);
   if (hasAudio && !hasVideo) s += 1_000_000_000; // pure audio first
   else if (hasAudio) s += 100_000_000;
-  // Prefer mp4/m4a for <audio> element reliability
   if (mime.includes('mp4') || mime.includes('mp4a')) s += 50_000;
   return s;
 }
@@ -560,7 +537,6 @@ async function streamFromInfo(
     }
   }
 
-  // chooseFormat path (respects type/quality)
   if (typeof info.chooseFormat === 'function' && player) {
     for (const opts of [
       { type: 'audio', quality: 'best', format: 'any' },
@@ -581,14 +557,13 @@ async function streamFromInfo(
     }
   }
 
-  // HLS (hls.js in player) — often present when progressive is sealed
   let hls = sd.hls_manifest_url;
   if (hls) {
     if (player?.decipher) {
       try {
         hls = await player.decipher(hls);
       } catch {
-        /* keep raw */
+
       }
     }
     if (String(hls).startsWith('http')) {
@@ -604,50 +579,16 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
   const id = String(videoId || '').trim();
   if (!id) throw new Error('YouTube: empty video id');
 
-  // 1) Main process (browser intercept / Piped / scrape) — may return miura-yt:// proxy URL
   const mainResolve = typeof window !== 'undefined' ? window.electronAPI?.ytResolveAudio : undefined;
-  let mainErr = '';
-  if (mainResolve) {
-    try {
-      const r = await mainResolve(id);
-      const u = r?.url ? String(r.url) : '';
-      // CRITICAL: after wrap, URL is miura-yt://… — NOT https://
-      // Old check startsWith('http') discarded successful resolves → youtubei hang → «таймаут»
-      if (r?.ok && u && (/^https:\/\//i.test(u) || u.startsWith('miura-yt:'))) {
-        console.log('[yt] stream ok main', r.client, r.protocol, u.slice(0, 48));
-        return u;
-      }
-      mainErr = r?.error || 'main:no-url';
-      console.warn('[yt] main resolve failed', mainErr);
-    } catch (e) {
-      mainErr = e instanceof Error ? e.message : String(e);
-      console.warn('[yt] main resolve error', mainErr);
-    }
-  } else {
-    mainErr = 'no-ytResolveAudio-ipc';
+  if (!mainResolve) {
+    throw new Error('YouTube: перезапусти miura (нет ytResolveAudio)');
   }
 
-  // Main already exhausted clients/browser/Piped. One short ANDROID attempt only.
-  try {
-    const yt = (await getTube()) as Tube & {
-      getBasicInfo: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
-      session?: { player?: YtPlayerLike };
-    };
-    const player = yt.session?.player;
-    const info = (await yt.getBasicInfo(id, { client: 'ANDROID' })) as YtInfoLike;
-    const url = await streamFromInfo(info, player, 'ANDROID-backup');
-    if (url) return url;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    mainErr = [mainErr, `backup:${msg.slice(0, 80)}`].filter(Boolean).join(' · ');
-    console.warn('[yt] backup', msg);
+  const r = await mainResolve(id);
+  const u = r?.url ? String(r.url) : '';
+  if (r?.ok && u && (/^https:\/\//i.test(u) || u.startsWith('miura-yt:'))) {
+    console.log('[yt] stream', r.client, u.slice(0, 48));
+    return u;
   }
-
-  throw new Error(
-    mainErr && /таймаут|timeout|бот|LOGIN|SOCKS|прокси/i.test(mainErr)
-      ? mainErr.length > 220
-        ? `${mainErr.slice(0, 220)}…`
-        : mainErr
-      : `YouTube: нет потока. ${mainErr || 'unknown'} Попробуй ещё раз или другой трек.`
-  );
+  throw new Error(r?.error || 'YouTube: нет audio-потока');
 }

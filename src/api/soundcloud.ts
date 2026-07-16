@@ -3020,9 +3020,13 @@ function cleanToken(): string {
 function socialHeaders(kind: 'auth' | 'query' = 'auth'): Record<string, string> {
   const h: Record<string, string> = {
     Accept: 'application/json, text/javascript, */*; q=0.01',
+    Origin: 'https://soundcloud.com',
+    Referer: 'https://soundcloud.com/',
+    'X-Requested-With': 'XMLHttpRequest',
   };
   if (kind === 'auth') {
-    h.Authorization = `OAuth ${cleanToken()}`;
+    const t = cleanToken();
+    if (t) h.Authorization = `OAuth ${t}`;
   }
   return h;
 }
@@ -3086,6 +3090,9 @@ async function scWrite(
       method,
       headers,
       body: body === undefined ? null : body,
+      // Likes/reposts need page Origin + cookies (net-only often 403)
+      preferNet: false,
+      credentials: 'include',
     });
     return { status: r.status, body: r.body || '' };
   }
@@ -3094,6 +3101,8 @@ async function scWrite(
     method,
     headers,
     body: body === undefined ? undefined : body,
+    credentials: 'include',
+    mode: 'cors',
   });
   return { status: res.status, body: await res.text().catch(() => '') };
 }
@@ -3153,20 +3162,28 @@ export async function likeTrack(trackId: number): Promise<void> {
   const id = Number(trackId);
   if (!Number.isFinite(id)) throw new Error('Некорректный id трека');
   const uid = await ensureMeIdForLikes();
+  const token = cleanToken();
+  if (!token) throw new Error('Нужен вход в SoundCloud (Настройки → войти)');
+
   const urn = encodeURIComponent(`soundcloud:tracks:${id}`);
   const uurn = encodeURIComponent(`soundcloud:users:${uid}`);
+  const rawUrn = `soundcloud:tracks:${id}`;
+  const rawUserUrn = `soundcloud:users:${uid}`;
 
   await tryWrite(
     [
-      // Canonical web path (got 403 before — retry with body/header variants)
       { method: 'PUT', path: `/users/${uid}/track_likes/${id}` },
-      { method: 'PUT', path: `/users/${uid}/likes/tracks/${id}` },
-      { method: 'POST', path: `/users/${uid}/track_likes/${id}` },
-      { method: 'PUT', path: `/me/track_likes/${id}` },
+      { method: 'PUT', path: `/users/${rawUserUrn}/track_likes/${rawUrn}` },
       { method: 'PUT', path: `/users/${uurn}/track_likes/${urn}` },
+      { method: 'PUT', path: `/me/track_likes/${id}` },
+      { method: 'PUT', path: `/users/${uid}/likes/tracks/${id}` },
       { method: 'PUT', path: `/likes/tracks/${id}` },
       { method: 'PUT', path: `/likes/tracks/${urn}` },
+      { method: 'POST', path: `/users/${uid}/track_likes/${id}` },
       { method: 'POST', path: `/likes/tracks/${id}` },
+      // Legacy public API favorites
+      { method: 'PUT', path: `/me/favorites/${id}` },
+      { method: 'PUT', path: `/users/${uid}/favorites/${id}` },
     ],
     'Не удалось лайкнуть'
   );

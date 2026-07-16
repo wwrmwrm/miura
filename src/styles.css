@@ -11,7 +11,7 @@ html[data-theme='black'] {
   --bg-elevated: #1c1918;
   --bg-deep: #0a0908;
   --bg-glass: rgba(22, 18, 16, 0.82);
-  --bar-bg: rgba(20, 17, 16, 0.94);
+  --bar-bg: rgba(14, 12, 11, 0.72);
   --line: rgba(255, 245, 235, 0.06);
   --line-2: rgba(255, 245, 235, 0.11);
   --ink: #f7f2ec;
@@ -36,7 +36,7 @@ html[data-theme='gray'] {
   --bg-elevated: #363230;
   --bg-deep: #1e1b1a;
   --bg-glass: rgba(46, 42, 40, 0.9);
-  --bar-bg: rgba(42, 38, 36, 0.95);
+  --bar-bg: rgba(32, 28, 26, 0.74);
   --line: rgba(255, 245, 235, 0.07);
   --line-2: rgba(255, 245, 235, 0.13);
   --ink: #f6f1eb;
@@ -62,7 +62,7 @@ html[data-theme='white'] {
   --bg-elevated: #fffcf8;
   --bg-deep: #f3eee6;
   --bg-glass: rgba(255, 252, 248, 0.9);
-  --bar-bg: rgba(255, 252, 248, 0.95);
+  --bar-bg: rgba(255, 252, 248, 0.78);
   --line: rgba(40, 30, 20, 0.08);
   --line-2: rgba(40, 30, 20, 0.12);
   --ink: #1c1612;
@@ -96,7 +96,7 @@ html[data-theme='white'] .bar {
 
 html[data-theme='white'] .rail {
   border-right: 1px solid var(--line);
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
 }
 
 html[data-theme='white'] .sw.on {
@@ -125,7 +125,15 @@ html[data-theme='white'] .sw.on {
   --radius-xl: 24px;
   --radius-pill: 999px;
   --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, 'Helvetica Neue', sans-serif;
+  --serif: Georgia, 'Times New Roman', 'Noto Serif JP', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
   --mono: 'SF Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  /* Banner-aligned brand accents (coral / sakura) */
+  --brand-coral: #c45c3e;
+  --brand-coral-soft: #e8a090;
+  --brand-ink: #f7f2ec;
+  --src-local: #a3e635;
+  --src-sc: #ff5500;
+  --src-yt: #ff3355;
   --side: 200px;
   --foot: 88px;
   --pad: 28px;
@@ -175,7 +183,96 @@ button {
   background: var(--bg-deep);
 }
 
-/* aurora / bloom disabled — flat background only */
+/*
+ * Full-app wallpaper (entire window).
+ * Photo + scrim so UI stays readable; no cropped corner masks.
+ */
+.shell.theme-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: #0a0908;
+  background-image:
+    /* readability scrim — darker left (nav) + soft vignette */
+    linear-gradient(
+      115deg,
+      rgba(8, 7, 6, 0.94) 0%,
+      rgba(10, 9, 8, 0.82) 28%,
+      rgba(12, 10, 9, 0.62) 58%,
+      rgba(10, 9, 8, 0.78) 100%
+    ),
+    radial-gradient(
+      ellipse 90% 70% at 78% 18%,
+      rgba(232, 160, 144, 0.14) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 100% 80% at 50% 100%,
+      rgba(8, 7, 6, 0.55) 0%,
+      transparent 50%
+    ),
+    url('./assets/sakura-art.jpg');
+  background-repeat: no-repeat;
+  background-position: center, center, center bottom, center 32%;
+  background-size: auto, auto, auto, cover;
+}
+
+/* Light theme: wash the same art into washi paper */
+html[data-theme='white'] .shell.theme-frame::before {
+  background-color: #f3eee6;
+  background-image:
+    linear-gradient(
+      115deg,
+      rgba(255, 252, 248, 0.94) 0%,
+      rgba(255, 252, 248, 0.86) 32%,
+      rgba(255, 248, 242, 0.72) 62%,
+      rgba(255, 252, 248, 0.88) 100%
+    ),
+    radial-gradient(
+      ellipse 90% 70% at 78% 18%,
+      rgba(232, 160, 144, 0.1) 0%,
+      transparent 55%
+    ),
+    url('./assets/sakura-art.jpg');
+  background-position: center, center, center 32%;
+  background-size: auto, auto, cover;
+  filter: saturate(0.75);
+}
+
+/* Gray theme: mid ink wash */
+html[data-theme='gray'] .shell.theme-frame::before {
+  background-image:
+    linear-gradient(
+      115deg,
+      rgba(28, 26, 24, 0.94) 0%,
+      rgba(32, 28, 26, 0.84) 30%,
+      rgba(36, 30, 28, 0.68) 60%,
+      rgba(28, 26, 24, 0.86) 100%
+    ),
+    radial-gradient(
+      ellipse 90% 70% at 78% 18%,
+      rgba(232, 160, 144, 0.1) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 100% 80% at 50% 100%,
+      rgba(18, 16, 14, 0.5) 0%,
+      transparent 50%
+    ),
+    url('./assets/sakura-art.jpg');
+  background-position: center, center, center bottom, center 32%;
+  background-size: auto, auto, auto, cover;
+}
+
+/* Profile gate already has its own art — hide shell wallpaper */
+.shell.profile-gate-shell::before,
+.shell.profile-boot::before {
+  display: none;
+}
+
+/* aurora / bloom disabled — replaced by shell wallpaper */
 .aurora,
 .aurora-blob,
 .aurora-grid,
@@ -230,31 +327,128 @@ button {
   min-height: 0;
   margin: 0;
   padding: 12px 8px 10px;
-  background: color-mix(in srgb, var(--bg) 88%, var(--bg-deep));
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
   border-right: 1px solid var(--line);
+  backdrop-filter: blur(18px) saturate(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(1.05);
 }
 
 .mark {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 8px 10px 14px;
+  padding: 10px 8px 16px;
   user-select: none;
 }
 
+/* Brand wordmark — same language as GitHub banner */
+.miura-brand {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+}
+
+.miura-brand-bar {
+  width: 2.5px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--brand-coral-soft), var(--brand-coral));
+  opacity: 0.95;
+  align-self: stretch;
+  min-height: 100%;
+}
+
+.miura-brand-stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .miura-logo {
-  display: inline-block;
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  display: block;
+  font-family: var(--serif);
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   line-height: 1;
   color: var(--ink);
-  font-family: var(--sans);
   transition: color 0.15s ease;
 }
 
-.miura-logo:hover {
+.miura-brand:hover .miura-logo {
   color: var(--accent);
+}
+
+.miura-kicker {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 400;
+  letter-spacing: 0.28em;
+  color: var(--ink-3);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.miura-brand.is-compact .miura-kicker {
+  display: none;
+}
+
+.miura-seal {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  border: 1.5px solid color-mix(in srgb, var(--brand-coral) 75%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  color: color-mix(in srgb, var(--brand-coral) 88%, var(--ink));
+  font-family: var(--serif);
+  font-weight: 600;
+  line-height: 1;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* Banner-style source pills */
+.src-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.src-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--bg-deep) 55%, transparent);
+  border: 1px solid var(--line-2);
+}
+
+.src-pill i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.src-pill-local i {
+  background: var(--src-local);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--src-local) 22%, transparent);
+}
+.src-pill-sc i {
+  background: var(--src-sc);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--src-sc) 22%, transparent);
+}
+.src-pill-yt i {
+  background: var(--src-yt);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--src-yt) 22%, transparent);
 }
 
 .mark-text,
@@ -266,10 +460,6 @@ button {
 .mark-brand-word,
 .mark-brand {
   display: none;
-}
-
-.mark .miura-logo {
-  display: inline-block;
 }
 
 .rail-kicker {
@@ -626,14 +816,16 @@ button {
   overflow: hidden;
   margin: 0;
   background: transparent;
+  position: relative;
 }
 
 .mast {
   flex-shrink: 0;
   padding: 16px var(--pad) 0;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-deep) 70%, transparent) 0%, transparent 100%);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  /* Let full-app wallpaper show through (no solid/blur strip) */
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border-bottom: none;
   z-index: 2;
 }
@@ -664,17 +856,19 @@ button {
   gap: 10px;
   max-width: 480px;
   margin-left: auto;
-  background: var(--fill-2);
-  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--bg-elevated) 42%, transparent);
+  border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   padding: 9px 16px;
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 
 .find:focus-within {
-  border-color: var(--fill-3);
-  background: var(--fill-3);
-  box-shadow: 0 0 0 3px var(--fill);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line-2));
+  background: color-mix(in srgb, var(--bg-elevated) 58%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .find-ico {
@@ -728,14 +922,17 @@ button {
   padding: 7px 14px;
   border-radius: var(--radius-pill);
   color: var(--ink-2);
-  background: var(--fill);
-  border: 1px solid transparent;
-  transition: color 0.15s, background 0.15s;
+  background: color-mix(in srgb, var(--bg-elevated) 38%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 
 .chip:hover {
   color: var(--ink);
-  background: var(--fill-2);
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
+  border-color: var(--line-2);
 }
 
 .chip.on {
@@ -743,6 +940,8 @@ button {
   background: var(--chip-on-bg);
   border-color: transparent;
   box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .scroll {
@@ -820,7 +1019,9 @@ button {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 22px;
-  padding: 8px 0 4px;
+  padding: 10px 0 6px 14px;
+  border-left: 2.5px solid transparent;
+  border-image: linear-gradient(180deg, var(--brand-coral-soft), var(--brand-coral)) 1;
 }
 
 .sc-home-greeting {
@@ -931,9 +1132,10 @@ button {
 }
 
 .sc-shelf-title {
+  font-family: var(--serif);
   font-size: 1.4rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--ink);
 }
 
@@ -1547,6 +1749,8 @@ button {
 }
 
 .cat-title {
+  display: block;
+  min-width: 0;
   font-size: 0.95rem;
   font-weight: 550;
   letter-spacing: -0.015em;
@@ -1554,6 +1758,20 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink);
+  line-height: 1.45;
+}
+
+/* Badge next to title: flex so SC/YT pill is not line-clamped/cropped */
+.cat-title:has(.src-badge),
+.cat-title:has(.cat-title-text) {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-overflow: clip;
+}
+
+.cat-title > .src-badge {
+  flex-shrink: 0;
 }
 
 .cat-sub {
@@ -1912,33 +2130,59 @@ button {
   background: var(--accent-hover);
 }
 
-/* Source badge */
+/* Source badge — banner pill; never shift up (clips under overflow:hidden titles) */
 .src-badge {
   display: inline-flex;
   align-items: center;
-  margin-left: 6px;
-  padding: 1px 6px;
+  gap: 5px;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 7px 0 5px;
+  height: 1.35em;
+  max-height: 18px;
   border-radius: var(--radius-pill);
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
+  line-height: 1;
   vertical-align: middle;
-  background: var(--fill-3);
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--bg-deep) 40%, var(--fill-3));
   color: var(--ink-2);
-  position: relative;
-  top: -1px;
+  border: 1px solid var(--line);
+  position: static;
+  top: auto;
+}
+.src-badge-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--ink-3);
 }
 .src-badge-local {
-  background: rgba(48, 209, 88, 0.18);
-  color: #3dd68c;
+  background: color-mix(in srgb, var(--src-local) 12%, transparent);
+  color: color-mix(in srgb, var(--src-local) 85%, var(--ink));
+  border-color: color-mix(in srgb, var(--src-local) 28%, transparent);
+}
+.src-badge-local .src-badge-dot {
+  background: var(--src-local);
 }
 .src-badge-youtube {
-  background: rgba(255, 0, 0, 0.15);
-  color: #ff6b6b;
+  background: color-mix(in srgb, var(--src-yt) 12%, transparent);
+  color: color-mix(in srgb, var(--src-yt) 80%, var(--ink));
+  border-color: color-mix(in srgb, var(--src-yt) 30%, transparent);
+}
+.src-badge-youtube .src-badge-dot {
+  background: var(--src-yt);
 }
 .src-badge-soundcloud {
-  background: var(--accent-dim);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--src-sc) 12%, transparent);
+  color: color-mix(in srgb, var(--src-sc) 85%, var(--ink));
+  border-color: color-mix(in srgb, var(--src-sc) 30%, transparent);
+}
+.src-badge-soundcloud .src-badge-dot {
+  background: var(--src-sc);
 }
 
 /* Queue drawer — always viewport-fixed; never a grid sibling of .bar */
@@ -2064,11 +2308,24 @@ button {
   gap: 2px;
 }
 .queue-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
   font-size: 0.9rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
+  line-height: 1.35;
+}
+.queue-drawer-title-text {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-drawer-title .src-badge {
+  flex-shrink: 0;
 }
 .queue-drawer-artist {
   font-size: 0.78rem;
@@ -2094,6 +2351,14 @@ button {
   padding: 56px 8px;
   color: var(--ink-2);
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.void-seal {
+  margin-bottom: 18px;
+  opacity: 0.92;
 }
 
 .void-jp {
@@ -2101,16 +2366,19 @@ button {
 }
 
 .void h3 {
-  font-weight: 700;
-  font-size: 1.25rem;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 1.3rem;
   color: var(--ink);
   margin-bottom: 8px;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.02em;
 }
 
 .void p {
   font-size: 0.95rem;
   color: var(--ink-3);
+  max-width: 36ch;
+  line-height: 1.5;
 }
 
 .load {
@@ -2246,6 +2514,51 @@ button {
   gap: 10px;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+/* Confirm / delete dialog */
+.modal-confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.modal-confirm-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: #ff8a80;
+  background: color-mix(in srgb, #ff453a 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ff453a 28%, transparent);
+}
+
+.modal-confirm-text {
+  margin: 0 0 18px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.modal-confirm-text strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.btn.solid.danger {
+  background: #e5484d;
+  color: #fff;
+  box-shadow: 0 2px 14px rgba(229, 72, 77, 0.35);
+}
+
+.btn.solid.danger:hover:not(:disabled) {
+  background: #f2555a;
+  color: #fff;
+  filter: none;
 }
 
 .modal-list {
@@ -2600,6 +2913,7 @@ button {
 .bar-now-text .tt.btn-like {
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   cursor: pointer;
   background: none;
   border: none;
@@ -2610,9 +2924,9 @@ button {
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 100%;
   min-width: 0;
+  line-height: 1.35;
 }
 
 .bar-now-text .tt.btn-like:hover {
@@ -3870,12 +4184,28 @@ button {
 }
 
 .bar-now .tt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
   font-size: 0.92rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   letter-spacing: -0.015em;
+  line-height: 1.35;
+}
+
+.bar-now .tt .tt-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-now .tt .src-badge {
+  flex-shrink: 0;
 }
 
 .bar-now .aa {
@@ -3905,15 +4235,19 @@ button {
   height: 36px;
   display: grid;
   place-items: center;
-  color: var(--ink-2);
+  color: var(--ink-3);
   border-radius: 50%;
-  transition: color 0.15s, background 0.15s, transform 0.12s;
+  background: transparent;
+  border: none;
+  transition: color 0.15s, opacity 0.15s, transform 0.12s;
   flex-shrink: 0;
+  opacity: 0.72;
 }
 
 .ico-btn:hover:not(:disabled) {
   color: var(--ink);
-  background: var(--fill-2);
+  opacity: 1;
+  background: transparent;
 }
 
 .ico-btn:disabled {
@@ -3930,6 +4264,7 @@ button {
   border-radius: 50%;
   margin: 0 6px;
   box-shadow: 0 2px 14px var(--accent-glow);
+  opacity: 1;
 }
 
 .ico-btn.main:hover:not(:disabled) {
@@ -3946,29 +4281,40 @@ button {
   box-shadow: none;
 }
 
+/* Active toggle: accent color only (no circle / glow) */
 .ico-btn.on {
   color: var(--accent);
+  opacity: 1;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
-/* Repeat modes: off (muted) · all (accent) · one (accent + “1” + ring) */
+.ico-btn.on:hover:not(:disabled) {
+  color: var(--accent);
+  opacity: 1;
+  background: transparent;
+}
+
 .ico-btn.repeat-btn.mode-off {
   color: var(--ink-3);
+  opacity: 0.5;
+}
+
+.ico-btn.repeat-btn.mode-off:hover:not(:disabled) {
   opacity: 0.85;
+  color: var(--ink-2);
 }
 
-.ico-btn.repeat-btn.mode-all.on {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
+.ico-btn.repeat-btn.mode-all.on,
 .ico-btn.repeat-btn.mode-one.on {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 1;
+  background: transparent;
+  box-shadow: none;
 }
 
 .ico-btn.repeat-btn.mode-one .repeat-one-digit {
-  /* digit sits in the loop center */
   pointer-events: none;
 }
 
@@ -4080,14 +4426,28 @@ button {
 
 .bar-end .ico-btn {
   color: var(--ink-3);
+  opacity: 0.72;
 }
 
 .bar-end .ico-btn:hover:not(:disabled) {
   color: var(--ink);
+  opacity: 1;
+  background: transparent;
 }
 
-.bar-end .ico-btn.on {
+.bar-end .ico-btn.on,
+.bar-end .ico-btn.mute-on {
   color: var(--accent);
+  opacity: 1;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.bar-end .ico-btn.on:hover:not(:disabled),
+.bar-end .ico-btn.mute-on:hover:not(:disabled) {
+  color: var(--accent);
+  background: transparent;
 }
 
 .vol {
@@ -4177,6 +4537,15 @@ button {
   color: var(--ink-2);
 }
 
+.profile-boot-inner .miura-logo {
+  font-size: 1.75rem;
+  letter-spacing: 0.12em;
+}
+
+.profile-boot-inner .miura-kicker {
+  text-align: left;
+}
+
 .profile-gate {
   position: relative;
   z-index: 2;
@@ -4186,37 +4555,102 @@ button {
   padding: 32px 20px;
   min-height: 100vh;
   width: 100%;
+  overflow: hidden;
+}
+
+.profile-gate-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.profile-gate-bg-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 70% 40%;
+  filter: saturate(0.92) brightness(0.72);
+  transform: scale(1.04);
+}
+
+.profile-gate-bg-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(105deg, rgba(12, 10, 9, 0.88) 0%, rgba(12, 10, 9, 0.62) 42%, rgba(12, 10, 9, 0.35) 100%),
+    radial-gradient(ellipse 50% 60% at 75% 30%, rgba(196, 92, 62, 0.12), transparent 70%);
 }
 
 .profile-gate-card {
+  position: relative;
+  z-index: 1;
   width: min(420px, 100%);
-  background: var(--bg-elevated, var(--bg-2));
-  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-elevated, var(--bg-2)) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line-2) 80%, transparent);
   border-radius: 20px;
   padding: 28px 26px 24px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .profile-gate-brand {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 14px;
-  margin-bottom: 22px;
+  margin-bottom: 14px;
 }
 
-.profile-gate-brand h1 {
-  font-size: 1.25rem;
-  font-weight: 700;
+.profile-gate-brand .miura-logo {
+  font-size: 1.85rem;
+  letter-spacing: 0.1em;
+}
+
+.profile-gate-brand-copy h1 {
+  font-size: 1.15rem;
+  font-weight: 650;
   letter-spacing: -0.02em;
   margin: 0 0 4px;
   color: var(--ink);
 }
 
-.profile-gate-brand p {
+.profile-gate-brand-copy p {
   margin: 0;
   font-size: 0.85rem;
   color: var(--ink-3);
   line-height: 1.4;
+}
+
+.profile-gate-pills {
+  margin-bottom: 20px;
+}
+
+.profile-gate-seal {
+  position: absolute;
+  right: 28px;
+  bottom: 28px;
+  z-index: 1;
+  opacity: 0.9;
+}
+
+/* Force dark-ink readability on sakura gate regardless of theme */
+.shell.profile-gate-shell {
+  color-scheme: dark;
+}
+.shell.profile-gate-shell .profile-gate-card {
+  --ink: #f7f2ec;
+  --ink-2: #d4c4b4;
+  --ink-3: #9a8e82;
+  --line: rgba(255, 245, 235, 0.1);
+  --line-2: rgba(255, 245, 235, 0.16);
+  --fill-2: rgba(255, 245, 235, 0.08);
+  --fill-3: rgba(255, 245, 235, 0.12);
+  --bg-elevated: rgba(26, 20, 16, 0.72);
+  --bg-2: rgba(22, 18, 14, 0.8);
+  --bg-3: rgba(40, 32, 28, 0.9);
+  color: var(--ink);
 }
 
 .profile-gate-h2 {
@@ -4373,8 +4807,8 @@ button {
 }
 
 .track-row-compact .cat-title {
-  display: block;
   max-width: 100%;
+  min-width: 0;
 }
 
 /* miura playlist rows: badge outside ellipsis, stable art slot */

@@ -59,7 +59,19 @@ There are **no** `dist:mac` / `dist:linux` scripts and no CI for those platforms
 | `npm run build` | Renderer → `dist/` |
 | `npm start` | Electron on `dist/` |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm run dist:win` | Windows NSIS + portable |
+| `npm run dist:win` | Windows NSIS installer + portable → `release/` |
+| `npm run dist:loader` | Standalone GitHub downloader → `release/loader/` |
+| `npm run dist:all` | App + loader |
+
+### Windows artifacts (`release/`)
+
+| File | |
+|------|--|
+| `miura-*-x64.exe` | NSIS installer (shortcuts, uninstall) |
+| `miura-*-portable-x64.exe` | Portable, no install |
+| `loader/miura-loader.bat` | Downloads latest release from GitHub |
+
+Publish the installer/portable as a [GitHub Release](https://github.com/wwrmwrm/miura/releases) so the loader can fetch them.
 
 ---
 

@@ -20,6 +20,7 @@ export function SourceBadge({
   const key = String(s || 'soundcloud');
   return (
     <span className={`src-badge src-badge-${key}`} title={key}>
+      <span className="src-badge-dot" aria-hidden />
       {LABEL[key] || key}
     </span>
   );

@@ -52,6 +52,7 @@ import {
   type HomeSection,
 } from './api/soundcloud';
 import { Modal } from './components/Modal';
+import { ConfirmModal } from './components/ConfirmModal';
 import { usePlayer } from './hooks/usePlayer';
 import { useI18n, useT, LOCALE_LABELS, LOCALE_ORDER, type Locale } from './i18n';
 import { TrackPage } from './pages/TrackPage';
@@ -61,7 +62,8 @@ import { MiuraMark } from './components/MiuraLogo';
 import { EmptyState } from './components/EmptyState';
 import { QueueDrawer } from './components/QueueDrawer';
 import { SourceBadge } from './components/SourceBadge';
-import { getPlayable } from './player/playableBridge';
+import { extractYoutubeVideoId, getPlayable } from './player/playableBridge';
+import { youtubeUid } from './player/types';
 import { applyAppTheme, getStoredTheme, THEME_ORDER, type AppTheme } from './theme';
 import { useMediaHotkeys } from './hooks/useMediaHotkeys';
 import { loadRecent, pushRecent, trackToRecent } from './lib/recent';
@@ -212,6 +214,7 @@ export default function App() {
   const [addToPlTrack, setAddToPlTrack] = useState<Track | null>(null);
   const [addToPlBusy, setAddToPlBusy] = useState(false);
   const [renamePlOpen, setRenamePlOpen] = useState(false);
+  const [deletePlOpen, setDeletePlOpen] = useState(false);
   const [renamePlTitle, setRenamePlTitle] = useState('');
   const [plBusy, setPlBusy] = useState(false);
   const [addTracksOpen, setAddTracksOpen] = useState(false);
@@ -506,6 +509,37 @@ export default function App() {
     [player]
   );
   useMediaHotkeys(mediaHandlers);
+
+  const playFavoriteItem = useCallback(
+    (f: FavItem) => {
+      if (f.playable) {
+        player.playPlayable(f.playable);
+        return;
+      }
+      const fromId = String(f.id || '').replace(/^(youtube:|yt:)/i, '').trim();
+      const vid =
+        extractYoutubeVideoId(f.track || null, null) ||
+        (f.source === 'youtube' && /^[a-zA-Z0-9_-]{6,}$/.test(fromId) ? fromId : '');
+      if (vid) {
+        const p: Playable = {
+          uid: youtubeUid(vid),
+          source: 'youtube',
+          title: f.title || `YouTube ${vid}`,
+          artist: f.artist || '',
+          durationMs: f.track?.duration || 0,
+          artworkUrl:
+            f.artworkUrl ||
+            f.track?.artwork_url ||
+            `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+          meta: { videoId: vid },
+        };
+        player.playPlayable(p);
+        return;
+      }
+      if (f.track) player.playTrack(f.track);
+    },
+    [player]
+  );
 
   // Discord Rich Presence — throttle progress ticks; react faster on play/pause
   useEffect(() => {
@@ -1183,16 +1217,21 @@ export default function App() {
     }
   };
 
-  const handleDeletePlaylist = async () => {
+  const openDeletePlaylist = async () => {
     if (!activePlaylist) return;
     if (!(await requireLogin())) return;
-    if (!window.confirm(`Удалить плейлист «${activePlaylist.title}»?`)) return;
+    setDeletePlOpen(true);
+  };
+
+  const handleDeletePlaylist = async () => {
+    if (!activePlaylist) return;
     setPlBusy(true);
     try {
       await deletePlaylist(activePlaylist.id);
       setLibraryPlaylists((prev) => prev.filter((p) => String(p.id) !== String(activePlaylist.id)));
       setActivePlaylist(null);
       setPage('playlists');
+      setDeletePlOpen(false);
       setStatus('Плейлист удалён');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось удалить');
@@ -1838,7 +1877,8 @@ export default function App() {
                             onClick={() => player.playPlayable(p, ytHits)}
                           >
                             <span className="cat-title">
-                              {p.title} <SourceBadge source="youtube" />
+                              <span className="cat-title-text">{p.title}</span>
+                              <SourceBadge source="youtube" />
                             </span>
                             <span className="cat-sub">{p.artist}</span>
                           </button>
@@ -1910,10 +1950,7 @@ export default function App() {
                         type="button"
                         className="idx"
                         title={t.common.play}
-                        onClick={() => {
-                          if (f.playable) player.playPlayable(f.playable);
-                          else if (f.track) player.playTrack(f.track);
-                        }}
+                        onClick={() => playFavoriteItem(f)}
                       >
                         <span className="idx-num">{i + 1}</span>
                         <span className="idx-play hover-only" aria-hidden>
@@ -1923,10 +1960,7 @@ export default function App() {
                       <button
                         type="button"
                         className="cat-art-wrap"
-                        onClick={() => {
-                          if (f.playable) player.playPlayable(f.playable);
-                          else if (f.track) player.playTrack(f.track);
-                        }}
+                        onClick={() => playFavoriteItem(f)}
                       >
                         {f.artworkUrl ? (
                           <img
@@ -1947,13 +1981,11 @@ export default function App() {
                       <button
                         type="button"
                         className="cat-main"
-                        onClick={() => {
-                          if (f.playable) player.playPlayable(f.playable);
-                          else if (f.track) player.playTrack(f.track);
-                        }}
+                        onClick={() => playFavoriteItem(f)}
                       >
                         <span className="cat-title">
-                          {f.title} <SourceBadge source={f.source} />
+                          <span className="cat-title-text">{f.title}</span>
+                          <SourceBadge source={f.source} />
                         </span>
                         <span className="cat-sub">{f.artist}</span>
                       </button>
@@ -2037,7 +2069,8 @@ export default function App() {
                         }}
                       >
                         <span className="cat-title">
-                          {r.title} <SourceBadge source={r.source} />
+                          <span className="cat-title-text">{r.title}</span>
+                          <SourceBadge source={r.source} />
                         </span>
                         <span className="cat-sub">{r.artist}</span>
                       </button>
@@ -2213,7 +2246,7 @@ export default function App() {
                           disabled={plBusy}
                           title="Удалить плейлист"
                           aria-label="delete"
-                          onClick={() => void handleDeletePlaylist()}
+                          onClick={() => void openDeletePlaylist()}
                         >
                           <Ico size={18}>
                             <path d="M3 6h18" />
@@ -2616,8 +2649,7 @@ export default function App() {
               onOpenLocal={() => navigateTo('local')}
               onOpenFavorites={() => navigateTo('library')}
               onPlayFavorite={(f) => {
-                if (f.track) player.playTrack(f.track);
-                else if (f.playable) player.playPlayable(f.playable);
+                playFavoriteItem(f);
               }}
               onToggleFavorite={(f) => {
                 setFavorites(
@@ -2869,6 +2901,22 @@ export default function App() {
             </button>
           </div>
         </Modal>
+      )}
+
+      {deletePlOpen && activePlaylist && (
+        <ConfirmModal
+          title="Удалить плейлист"
+          message={
+            <>
+              Удалить плейлист <strong>«{activePlaylist.title}»</strong>? Это нельзя отменить.
+            </>
+          }
+          confirmLabel={t.common.remove}
+          cancelLabel={t.common.cancel}
+          busy={plBusy}
+          onClose={() => !plBusy && setDeletePlOpen(false)}
+          onConfirm={() => void handleDeletePlaylist()}
+        />
       )}
 
       {addTracksOpen && activePlaylist && (
@@ -4812,11 +4860,18 @@ function PlayerBar({
             detail: 'SOCKS не достучался до потока. Проверь VPN/прокси.',
           };
         }
+        if (/YouTube|ytPage|video id|SOCKS|реклам/i.test(errText)) {
+          const one = errText.replace(/\s+/g, ' ').trim();
+          return {
+            title: 'YouTube',
+            detail: one.length > 160 ? `${one.slice(0, 160)}…` : one,
+          };
+        }
         // One short line for the bar; full text in title tooltip
         const one = errText.replace(/\s+/g, ' ').trim();
         return {
           title: 'Ошибка воспроизведения',
-          detail: one.length > 140 ? `${one.slice(0, 140)}…` : one,
+          detail: one.length > 140 ? `${one.slice(0, 140)}…` : one || 'Неизвестная ошибка',
         };
       })()
     : null;
@@ -4845,13 +4900,13 @@ function PlayerBar({
         <div className="bar-now-text">
           {current && onOpenTrack ? (
             <button type="button" className="tt btn-like" onClick={onOpenTrack} title="Открыть трек">
-              {current.title}
+              <span className="tt-text">{current.title}</span>
               <SourceBadge track={current} />
               {isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
             </button>
           ) : (
             <div className="tt">
-              {current?.title ?? 'Ничего не играет'}
+              <span className="tt-text">{current?.title ?? 'Ничего не играет'}</span>
               {current && isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
             </div>
           )}
@@ -4879,8 +4934,9 @@ function PlayerBar({
             type="button"
             className={`ico-btn ${shuffle ? 'on' : ''}`}
             onClick={toggleShuffle}
-            title={shuffle ? 'Перемешивание вкл' : 'Перемешивание выкл'}
-            aria-label="shuffle"
+            title={shuffle ? 'Перемешивание: вкл' : 'Перемешивание: выкл'}
+            aria-label={shuffle ? 'shuffle on' : 'shuffle off'}
+            aria-pressed={shuffle}
           >
             <IconShuffle />
           </button>
@@ -4962,8 +5018,9 @@ function PlayerBar({
             type="button"
             className={`ico-btn ${stationMode ? 'on' : ''}`}
             onClick={onStation}
-            title="Станция по треку"
-            aria-label="station"
+            title={stationMode ? 'Станция: вкл' : 'Станция: выкл'}
+            aria-label={stationMode ? 'station on' : 'station off'}
+            aria-pressed={stationMode}
           >
             <IconRadio />
           </button>
@@ -4973,8 +5030,9 @@ function PlayerBar({
             type="button"
             className={`ico-btn ${liked ? 'on' : ''}`}
             onClick={onLike}
-            title="Лайк SC"
-            aria-label="like"
+            title={liked ? 'Лайк SC: да' : 'Лайк SC: нет'}
+            aria-label={liked ? 'liked' : 'like'}
+            aria-pressed={liked}
           >
             <IconHeart filled={liked} />
           </button>
@@ -4984,8 +5042,9 @@ function PlayerBar({
             type="button"
             className={`ico-btn ${isFav ? 'on' : ''}`}
             onClick={onToggleFav}
-            title="Избранное miura"
-            aria-label="favorite"
+            title={isFav ? 'Избранное: да' : 'Избранное: нет'}
+            aria-label={isFav ? 'favorite on' : 'favorite off'}
+            aria-pressed={isFav}
           >
             {isFav ? '★' : '☆'}
           </button>
@@ -4997,10 +5056,11 @@ function PlayerBar({
         )}
         <button
           type="button"
-          className="ico-btn"
+          className={`ico-btn ${isMuted || volume === 0 ? 'mute-on' : ''}`}
           onClick={toggleMute}
-          title={isMuted || volume === 0 ? 'Звук' : 'Без звука'}
-          aria-label="volume"
+          title={isMuted || volume === 0 ? 'Без звука (нажми — включить)' : 'Звук (нажми — выкл)'}
+          aria-label={isMuted || volume === 0 ? 'muted' : 'volume'}
+          aria-pressed={isMuted || volume === 0}
         >
           {isMuted || volume === 0 ? <IconMute /> : <IconVol />}
         </button>

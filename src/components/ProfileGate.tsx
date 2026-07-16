@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { MiuraMark } from './MiuraLogo';
+import { MiuraMark, MiuraSeal, SourcePills } from './MiuraLogo';
 import { useT } from '../i18n';
+import sakuraArt from '../assets/sakura-art.jpg';
 import {
   createProfile,
   pickProfileAvatar,
@@ -78,14 +79,19 @@ export function ProfileGate({ profiles, onReady }: Props) {
 
   return (
     <div className="profile-gate">
+      <div className="profile-gate-bg" aria-hidden>
+        <img src={sakuraArt} alt="" className="profile-gate-bg-img" />
+        <div className="profile-gate-bg-scrim" />
+      </div>
       <div className="profile-gate-card">
         <div className="profile-gate-brand">
           <MiuraMark />
-          <div>
+          <div className="profile-gate-brand-copy">
             <h1>{t.profile.welcome}</h1>
             <p>{t.profile.welcomeLead}</p>
           </div>
         </div>
+        <SourcePills className="profile-gate-pills" />
 
         {mode === 'pick' && profiles.length > 0 ? (
           <>
@@ -199,6 +205,7 @@ export function ProfileGate({ profiles, onReady }: Props) {
 
         {error && mode === 'pick' && <p className="profile-gate-error">{error}</p>}
       </div>
+      <MiuraSeal size={44} className="profile-gate-seal" />
     </div>
   );
 }

@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('local-library-event', handler);
     return () => ipcRenderer.removeListener('local-library-event', handler);
   },
-  /** Main window → main process → mini window now-playing */
+
   playerPushState: (state) => ipcRenderer.invoke('player-push-state', state),
   playerGetState: () => ipcRenderer.invoke('player-get-state'),
   onPlayerState: (callback) => {
@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('player-state', handler);
     return () => ipcRenderer.removeListener('player-state', handler);
   },
-  /** Mini / tray: command main player (no local audio) */
+
   mediaCommand: (cmd) => ipcRenderer.invoke('media-command', cmd),
   resolveClientId: () => ipcRenderer.invoke('resolve-client-id'),
   authGet: () => ipcRenderer.invoke('auth-get'),
@@ -69,15 +69,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   discordClearPresence: () => ipcRenderer.invoke('discord-clear-presence'),
   apiFetch: (payload) => ipcRenderer.invoke('api-fetch', payload),
   apiUpload: (payload) => ipcRenderer.invoke('api-upload', payload),
-  /** Binary media/license fetch for Shaka (no CORS) */
+
   mediaFetch: (payload) => ipcRenderer.invoke('media-fetch', payload),
-  /** YouTube / Innertube (main process, proxy + direct fallback) */
+
   ytFetch: (payload) => ipcRenderer.invoke('yt-fetch', payload),
+
   ytResolveAudio: (videoId) => ipcRenderer.invoke('yt-resolve-audio', videoId),
-  /** Hidden Chromium YouTube player (real page audio — no googlevideo re-fetch) */
-  ytEmbedPlay: (payload) => ipcRenderer.invoke('yt-embed-play', payload),
-  ytEmbedCommand: (payload) => ipcRenderer.invoke('yt-embed-command', payload),
-  /** Official SC embed window (legacy; prefer native DRM) */
+
+  ytPagePlay: (payload) => ipcRenderer.invoke('yt-page-play', payload),
+  ytPageCommand: (payload) => ipcRenderer.invoke('yt-page-command', payload),
+
   scEmbedPlay: (payload) => ipcRenderer.invoke('sc-embed-play', payload),
   scEmbedCommand: (payload) => ipcRenderer.invoke('sc-embed-command', payload),
 });

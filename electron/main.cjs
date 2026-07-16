@@ -65,7 +65,7 @@ let pendingBrowserLogin = null; // { resolve, reject, timer }
 /** Hidden SoundCloud embed player (DRM tracks) */
 let scEmbedWin = null;
 /** Hidden YouTube watch window — audio only (googlevideo re-fetch always 403s) */
-let ytEmbedWin = null;
+
 
 // Realistic Chrome UA (match installed Chromium major roughly)
 const CHROME_UA =
@@ -188,38 +188,40 @@ function FindProxyForURL(url, host) {
 `.trim();
 }
 
-async function applyProxyToSession(ses, cfg) {
+async function applyProxyToSession(ses, cfg, opts = {}) {
+  const forceReconnect = opts.forceReconnect === true;
+
   if (!cfg.enabled || !cfg.url) {
     await ses.setProxy({ mode: 'system' });
     await ses.setProxy({ mode: 'direct' });
-    try {
-      await ses.closeAllConnections();
-    } catch {
-      /* ignore */
+    if (forceReconnect) {
+      try {
+        await ses.closeAllConnections();
+      } catch {
+        /* ignore */
+      }
     }
     return { ok: true, applied: 'direct' };
   }
 
   const parsed = parseProxyForPac(cfg.url);
 
-  // fixed_servers works for ALL BrowserWindows on this session (main + sign-in).
-  // PAC is flaky on Windows and often skips login popup — avoid for local proxies.
   const useFixed =
     cfg.mode === 'all' ||
     /127\.0\.0\.1|localhost/i.test(cfg.url) ||
     /\/\/[^/]+@/.test(parsed.proxyRules);
 
   if (useFixed) {
-    // IMPORTANT: bypass localhost so Vite/dev UI is not sent through SOCKS
-    // Do NOT use <-loopback> — that forces 127.0.0.1 THROUGH the proxy
     await ses.setProxy({
       proxyRules: parsed.proxyRules,
       proxyBypassRules: 'localhost;127.0.0.1;<local>',
     });
-    try {
-      await ses.closeAllConnections();
-    } catch {
-      /* ignore */
+    if (forceReconnect) {
+      try {
+        await ses.closeAllConnections();
+      } catch {
+        /* ignore */
+      }
     }
     return {
       ok: true,
@@ -232,20 +234,25 @@ async function applyProxyToSession(ses, cfg) {
   const pacDataUrl =
     'data:application/x-ns-proxy-autoconfig;base64,' + Buffer.from(pac, 'utf8').toString('base64');
   await ses.setProxy({ pacScript: pacDataUrl });
-  try {
-    await ses.closeAllConnections();
-  } catch {
-    /* ignore */
+  if (forceReconnect) {
+    try {
+      await ses.closeAllConnections();
+    } catch {
+      /* ignore */
+    }
   }
   return { ok: true, applied: 'sc-only', pac: parsed.pacType };
 }
 
 async function applyProxyConfig(cfg) {
-  // Apply to default session + dedicated login partition so sign-in always goes via proxy
-  const targets = [session.defaultSession, session.fromPartition('persist:sc-login')];
+  const targets = [
+    session.defaultSession,
+    session.fromPartition('persist:sc-login'),
+    session.fromPartition('persist:miura-yt-audio'),
+  ];
   let last = { ok: true, applied: 'direct' };
   for (const ses of targets) {
-    last = await applyProxyToSession(ses, cfg);
+    last = await applyProxyToSession(ses, cfg, { forceReconnect: true });
   }
   return last;
 }
@@ -2270,165 +2277,28 @@ function toMiuraFileUrl(absPath) {
   return pathToFileURL(resolved).href.replace(/^file:/i, 'miura-file:');
 }
 
-/** Same partition as the hidden YT browser — cookies + proxy for googlevideo. */
-const YT_RESOLVE_PARTITION = 'persist:miura-yt-resolve';
-
-function getYtResolveSession() {
-  return session.fromPartition(YT_RESOLVE_PARTITION);
-}
-
-/**
- * googlevideo often 403s from defaultSession. Proxy through the YT resolve
- * partition (cookies from the hidden browser) via miura-yt://.
- */
-function wrapYtStreamForPlayer(url, mime) {
-  const u = String(url || '');
-  if (!/^https:\/\//i.test(u)) return u;
-  if (/miura-yt:/i.test(u)) return u;
-  // HLS playlists need segment fetches — leave for hls.js / yt-fetch path
-  if (/\.m3u8(\?|$)/i.test(u) || /mpegURL|application\/vnd\.apple/i.test(String(mime || ''))) {
-    return u;
-  }
-  const q = new URLSearchParams();
-  q.set('u', u);
-  if (mime) q.set('m', String(mime).split(';')[0].trim());
-  return `miura-yt://play/?${q.toString()}`;
-}
-
-/** Quick Range probe so we don't hand the player a 403 URL. */
-async function probeYtMediaUrl(url, ses) {
-  try {
-    const doFetch =
-      typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-    const res = await doFetch(url, {
-      method: 'GET',
-      headers: {
-        'User-Agent': CHROME_UA,
-        Referer: 'https://www.youtube.com/',
-        Origin: 'https://www.youtube.com',
-        Accept: '*/*',
-        Range: 'bytes=0-2047',
-      },
-      bypassCustomProtocolHandlers: true,
+const { createYtAudio } = require('./ytAudio.cjs');
+let ytAudioApi = null;
+function getYtAudio() {
+  if (!ytAudioApi) {
+    ytAudioApi = createYtAudio({
+      session,
+      net,
+      protocol,
+      BrowserWindow,
+      chromeUa: typeof CHROME_UA !== 'undefined' ? CHROME_UA : undefined,
+      readProxyConfig,
+      applyProxyToSession,
     });
-    if (res.ok || res.status === 206) {
-      try {
-        // drain a bit so connection isn't left hanging
-        await res.arrayBuffer();
-      } catch {
-        /* ignore */
-      }
-      return true;
-    }
-    console.warn('[yt-resolve] probe fail', res.status, url.slice(0, 72));
-    return false;
-  } catch (e) {
-    console.warn('[yt-resolve] probe err', e?.message || e);
-    return false;
   }
-}
-
-function registerYtMediaProtocol() {
-  try {
-    protocol.handle('miura-yt', async (request) => {
-      try {
-        const parsed = new URL(request.url);
-        const target = parsed.searchParams.get('u');
-        if (!target || !/^https:\/\//i.test(target)) {
-          return new Response('bad yt url', { status: 400 });
-        }
-        const mimeHint = parsed.searchParams.get('m') || '';
-        const headers = {
-          'User-Agent': CHROME_UA,
-          Referer: 'https://www.youtube.com/',
-          Origin: 'https://www.youtube.com',
-          Accept: '*/*',
-        };
-        try {
-          const range =
-            request.headers?.get?.('Range') ||
-            request.headers?.get?.('range') ||
-            null;
-          if (range) headers.Range = range;
-        } catch {
-          /* ignore */
-        }
-
-        // MUST use the same partition as the hidden browser (not defaultSession)
-        const ses = getYtResolveSession();
-        try {
-          const cfg = readProxyConfig();
-          await applyProxyToSession(ses, cfg);
-        } catch {
-          /* already applied */
-        }
-
-        const doFetch =
-          typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-        let res = await doFetch(target, {
-          method: 'GET',
-          headers,
-          bypassCustomProtocolHandlers: true,
-        });
-
-        // Fallback: defaultSession (sometimes CDN is happier there)
-        if (!res.ok && res.status !== 206) {
-          console.warn('[miura-yt] yt-ses', res.status, '→ try defaultSession');
-          try {
-            await res.arrayBuffer();
-          } catch {
-            /* ignore */
-          }
-          const def = session.defaultSession;
-          res = await (typeof def.fetch === 'function' ? def.fetch.bind(def) : net.fetch.bind(net))(
-            target,
-            { method: 'GET', headers, bypassCustomProtocolHandlers: true }
-          );
-        }
-
-        const out = new Headers();
-        const ct =
-          res.headers.get('Content-Type') ||
-          res.headers.get('content-type') ||
-          mimeHint ||
-          'audio/mp4';
-        out.set('Content-Type', ct);
-        const cl = res.headers.get('Content-Length') || res.headers.get('content-length');
-        if (cl) out.set('Content-Length', cl);
-        const cr = res.headers.get('Content-Range') || res.headers.get('content-range');
-        if (cr) out.set('Content-Range', cr);
-        const ar = res.headers.get('Accept-Ranges') || res.headers.get('accept-ranges');
-        out.set('Accept-Ranges', ar || 'bytes');
-        out.set('Access-Control-Allow-Origin', '*');
-
-        if (!res.ok && res.status !== 206) {
-          const preview = await res.text().catch(() => '');
-          console.warn(
-            '[miura-yt] upstream',
-            res.status,
-            target.slice(0, 80),
-            preview.slice(0, 120)
-          );
-          return new Response(preview || `upstream ${res.status}`, { status: res.status });
-        }
-
-        return new Response(res.body, { status: res.status, headers: out });
-      } catch (e) {
-        console.error('[miura-yt]', e);
-        return new Response(e instanceof Error ? e.message : String(e), { status: 502 });
-      }
-    });
-    console.log('[miura-yt] protocol ready');
-  } catch (e) {
-    console.warn('[miura-yt] protocol', e);
-  }
+  return ytAudioApi;
 }
 
 app.whenReady().then(async () => {
   // Local files for <audio src="miura-file://..."> (+ legacy miu-file)
   registerLocalFileProtocol('miura-file');
   registerLocalFileProtocol('miu-file');
-  registerYtMediaProtocol();
+  getYtAudio().registerProtocol();
 
   // Optional Castlabs Widevine (only if someone swaps electron for ECS).
   // Default GitHub build uses stock Electron — open streams only.
@@ -3203,18 +3073,22 @@ app.whenReady().then(async () => {
 
   async function fetchViaScPage(url, method, headers, body, credentialsMode) {
     const win = await ensureScPageWindow();
-    const hdrs = headers || {};
+    const hdrs = { ...(headers || {}) };
     const creds = credentialsMode === 'omit' ? 'omit' : 'include';
-    // Mirror OAuth into cookies — SC web often relies on both
-    // Skip for media exchange (credentials omit): stale oauth_token cookie → 401 on /media/*
     const auth = String(hdrs.Authorization || hdrs.authorization || '');
     const tok = auth.replace(/^OAuth\s+/i, '').trim();
     if (tok && creds !== 'omit') {
       const ses = session.fromPartition('persist:sc-login');
+      try {
+        const cfg = readProxyConfig();
+        await applyProxyToSession(ses, cfg, { forceReconnect: false });
+      } catch {
+        /* ignore */
+      }
       const cookieOpts = [
         { url: 'https://api-v2.soundcloud.com', name: 'oauth_token', value: tok, secure: true, httpOnly: false },
         { url: 'https://soundcloud.com', name: 'oauth_token', value: tok, secure: true, httpOnly: false },
-        { url: 'https://api-v2.soundcloud.com', name: 'sc_anonymous_id', value: '0', secure: true },
+        { url: 'https://api.soundcloud.com', name: 'oauth_token', value: tok, secure: true, httpOnly: false },
       ];
       for (const c of cookieOpts) {
         try {
@@ -3224,6 +3098,8 @@ app.whenReady().then(async () => {
         }
       }
     }
+    if (!hdrs.Origin && !hdrs.origin) hdrs.Origin = 'https://soundcloud.com';
+    if (!hdrs.Referer && !hdrs.referer) hdrs.Referer = 'https://soundcloud.com/';
 
     const payload = {
       url,
@@ -3803,363 +3679,11 @@ app.whenReady().then(async () => {
     }
   });
 
-  /**
-   * YouTube playback in a real Chromium window.
-   * Extracted googlevideo URLs always 403 when re-fetched; the page player works.
-   */
-  let ytEmbedPlayChain = Promise.resolve();
-  let ytEmbedPlayGen = 0;
-
-  function withTimeout(promise, ms, label) {
-    let timer;
-    const t = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(label || `timeout ${ms}ms`)), ms);
-    });
-    return Promise.race([promise, t]).finally(() => clearTimeout(timer));
-  }
-
-  function getYtEmbedWindow() {
-    if (ytEmbedWin && !ytEmbedWin.isDestroyed()) return ytEmbedWin;
-    // defaultSession already has the user's SOCKS — more reliable than a side partition
-    ytEmbedWin = new BrowserWindow({
-      width: 640,
-      height: 360,
-      show: false,
-      skipTaskbar: true,
-      frame: true,
-      title: 'miura · YouTube',
-      backgroundColor: '#000000',
-      webPreferences: {
-        session: session.defaultSession,
-        nodeIntegration: false,
-        contextIsolation: true,
-        backgroundThrottling: false,
-        autoplayPolicy: 'no-user-gesture-required',
-        sandbox: true,
-      },
-    });
-    try {
-      ytEmbedWin.webContents.setUserAgent(CHROME_UA);
-      ytEmbedWin.webContents.setBackgroundThrottling(false);
-      ytEmbedWin.webContents.setAudioMuted(false);
-      ytEmbedWin.setMenuBarVisibility(false);
-    } catch {
-      /* ignore */
-    }
-    ytEmbedWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    ytEmbedWin.on('closed', () => {
-      ytEmbedWin = null;
-    });
-    return ytEmbedWin;
-  }
-
-  async function ytEmbedLoadUrl(win, pageUrl, ms = 14000) {
-    try {
-      win.webContents.stop();
-    } catch {
-      /* ignore */
-    }
-    await withTimeout(
-      win.loadURL(pageUrl, {
-        userAgent: CHROME_UA,
-        httpReferrer: 'https://www.youtube.com/',
-      }),
-      ms,
-      `load timeout: ${pageUrl.slice(0, 64)}`
-    );
-  }
-
-  async function ytEmbedExec(code) {
-    const win = getYtEmbedWindow();
-    if (!win || win.isDestroyed()) throw new Error('yt embed window gone');
-    return withTimeout(win.webContents.executeJavaScript(code, true), 8000, 'exec timeout');
-  }
-
-  async function ytEmbedPlayImpl(payload) {
-    const videoId = String(payload?.videoId || '').trim();
-    if (!/^[a-zA-Z0-9_-]{6,}$/.test(videoId)) {
-      return { ok: false, error: 'bad video id' };
-    }
-    const volume = Math.max(0, Math.min(1, Number(payload?.volume ?? 0.85)));
-    const startAt = Math.max(0, Number(payload?.startAt || 0) || 0);
-    const myGen = ++ytEmbedPlayGen;
-    const win = getYtEmbedWindow();
-
-    // watch first — embed often hangs / consent wall through proxy
-    const urls = [
-      `https://www.youtube.com/watch?v=${videoId}&bpctr=9999999999&has_verified=1`,
-      `https://www.youtube.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&controls=1`,
-    ];
-
-    let lastErr = '';
-    for (const pageUrl of urls) {
-      if (myGen !== ytEmbedPlayGen) {
-        return { ok: false, error: 'cancelled' };
-      }
-      try {
-        console.log('[yt-embed] load', pageUrl.slice(0, 90));
-        await ytEmbedLoadUrl(win, pageUrl, 14000);
-        if (myGen !== ytEmbedPlayGen) return { ok: false, error: 'cancelled' };
-
-        const result = await withTimeout(
-          win.webContents.executeJavaScript(
-            `
-            (async () => {
-              const vol = ${volume};
-              const startAt = ${startAt};
-              const deadline = Date.now() + 16000;
-              const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-              const clickPlay = () => {
-                const sels = [
-                  'button.ytp-large-play-button',
-                  'button.ytp-play-button',
-                  'button[aria-label*="Play"]',
-                  'button[title*="Play"]',
-                  '.ytp-cued-thumbnail-overlay',
-                  '.ytp-cued-thumbnail-overlay-image',
-                ];
-                for (const s of sels) {
-                  const el = document.querySelector(s);
-                  if (el) { try { el.click(); return true; } catch (e) {} }
-                }
-                return false;
-              };
-
-              // Dismiss cookie/consent if present
-              try {
-                const consent = document.querySelector(
-                  'button[aria-label*="Accept"], button[aria-label*="Agree"], form[action*="consent"] button'
-                );
-                if (consent) consent.click();
-              } catch (e) {}
-
-              while (Date.now() < deadline) {
-                const v = document.querySelector('video');
-                if (!v) {
-                  clickPlay();
-                  await sleep(250);
-                  continue;
-                }
-                try {
-                  v.muted = false;
-                  v.volume = vol;
-                  if (startAt > 1) {
-                    try { v.currentTime = startAt; } catch (e) {}
-                  }
-                  if (v.paused) {
-                    clickPlay();
-                    try { await v.play(); } catch (e) {}
-                  }
-                  // Playing OR has buffered data = success (duration may be NaN briefly)
-                  if (!v.paused || v.readyState >= 2 || v.currentTime > 0.2) {
-                    if (v.paused) {
-                      try { await v.play(); } catch (e) {}
-                    }
-                    return {
-                      ok: true,
-                      duration: Number(v.duration) && isFinite(v.duration) ? Number(v.duration) : 0,
-                      currentTime: Number(v.currentTime) || 0,
-                      via: location.pathname.indexOf('/embed/') >= 0 ? 'embed' : 'watch',
-                      paused: !!v.paused,
-                    };
-                  }
-                } catch (e) {}
-                clickPlay();
-                await sleep(250);
-              }
-
-              const bodyText = (document.body && document.body.innerText || '').slice(0, 500);
-              if (/sign in|confirm you.re not a bot|unusual traffic|login required/i.test(bodyText)) {
-                return { ok: false, error: 'YouTube: бот-проверка. SOCKS «весь трафик» + перезапуск miura.' };
-              }
-              if (/age-restricted|age gate|несовершеннолет/i.test(bodyText)) {
-                return { ok: false, error: 'YouTube: возрастное ограничение' };
-              }
-              return {
-                ok: false,
-                error: 'YouTube: плеер не стартовал (нет video / автозапуск).',
-                snippet: bodyText.slice(0, 120),
-              };
-            })()
-            `,
-            true
-          ),
-          18000,
-          'play-script timeout'
-        );
-
-        if (myGen !== ytEmbedPlayGen) return { ok: false, error: 'cancelled' };
-
-        if (result?.ok) {
-          // Keep window hidden; audio still plays with backgroundThrottling=false
-          try {
-            if (win.isVisible()) win.hide();
-          } catch {
-            /* ignore */
-          }
-          console.log('[yt-embed] ok', result.via, 'dur', result.duration, 'paused', result.paused);
-          // If still paused, show mini window so user can click Play once
-          if (result.paused) {
-            try {
-              win.showInactive();
-              win.setAlwaysOnTop(true, 'floating');
-            } catch {
-              /* ignore */
-            }
-            return {
-              ok: true,
-              ...result,
-              needsClick: true,
-            };
-          }
-          return result;
-        }
-        lastErr = result?.error || 'no play';
-        console.warn('[yt-embed] miss', lastErr, result?.snippet || '');
-      } catch (e) {
-        lastErr = e instanceof Error ? e.message : String(e);
-        console.warn('[yt-embed] err', lastErr);
-        try {
-          win.webContents.stop();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    return { ok: false, error: lastErr || 'YouTube embed failed' };
-  }
-
-  ipcMain.handle('yt-embed-play', async (_e, payload) => {
-    // Serialize — parallel loadURL was hanging silently
-    const run = () => ytEmbedPlayImpl(payload);
-    const p = ytEmbedPlayChain.then(run, run);
-    ytEmbedPlayChain = p.then(
-      () => undefined,
-      () => undefined
-    );
-    try {
-      return await withTimeout(p, 36000, 'YouTube: таймаут 36с. Проверь SOCKS и нажми play ещё раз.');
-    } catch (e) {
-      console.warn('[yt-embed] outer', e?.message || e);
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  });
-
-  ipcMain.handle('yt-embed-command', async (_e, payload) => {
-    const cmd = String(payload?.cmd || '');
-    const value = payload?.value;
-    try {
-      if (cmd === 'stop') {
-        ytEmbedPlayGen += 1; // cancel in-flight play
-        if (ytEmbedWin && !ytEmbedWin.isDestroyed()) {
-          try {
-            ytEmbedWin.webContents.stop();
-            await withTimeout(
-              ytEmbedWin.webContents
-                .executeJavaScript(
-                  `document.querySelectorAll('video,audio').forEach(m => { try { m.pause(); } catch(e){} }); true;`,
-                  true
-                )
-                .catch(() => {}),
-              2000,
-              'stop exec'
-            );
-            await withTimeout(ytEmbedWin.loadURL('about:blank'), 4000, 'stop blank').catch(() => {});
-            try {
-              ytEmbedWin.hide();
-            } catch {
-              /* ignore */
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-        return { ok: true };
-      }
-      if (!ytEmbedWin || ytEmbedWin.isDestroyed()) {
-        return { ok: false, error: 'no yt window', hasMedia: false, paused: true };
-      }
-      if (cmd === 'pause') {
-        return await ytEmbedExec(`
-          (() => {
-            const v = document.querySelector('video');
-            if (v) { v.pause(); return { ok: true }; }
-            const b = document.querySelector('button.ytp-play-button[data-title-no-tooltip="Pause"], button.ytp-play-button');
-            if (b) b.click();
-            return { ok: true };
-          })()
-        `);
-      }
-      if (cmd === 'play') {
-        return await ytEmbedExec(`
-          (async () => {
-            const v = document.querySelector('video');
-            if (v) {
-              try { await v.play(); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; }
-            }
-            const b = document.querySelector('button.ytp-large-play-button, button.ytp-play-button');
-            if (b) b.click();
-            return { ok: true };
-          })()
-        `);
-      }
-      if (cmd === 'seek') {
-        const t = Number(value) || 0;
-        return await ytEmbedExec(`
-          (() => {
-            const v = document.querySelector('video');
-            if (!v) return { ok: false };
-            const max = Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.25 : ${t};
-            v.currentTime = Math.max(0, Math.min(${t}, max));
-            return { ok: true, currentTime: v.currentTime, duration: v.duration || 0 };
-          })()
-        `);
-      }
-      if (cmd === 'volume') {
-        const v = Math.max(0, Math.min(1, Number(value) || 0));
-        return await ytEmbedExec(`
-          (() => {
-            document.querySelectorAll('video, audio').forEach((m) => {
-              m.volume = ${v};
-              m.muted = ${v} <= 0;
-            });
-            return { ok: true };
-          })()
-        `);
-      }
-      if (cmd === 'status') {
-        return await ytEmbedExec(`
-          (() => {
-            const v = document.querySelector('video');
-            if (!v) return { ok: true, hasMedia: false, paused: true, currentTime: 0, duration: 0, ended: false };
-            return {
-              ok: true,
-              hasMedia: true,
-              paused: !!v.paused,
-              ended: !!v.ended || (v.duration > 0 && v.currentTime >= v.duration - 0.35),
-              currentTime: Number(v.currentTime) || 0,
-              duration: Number(v.duration) || 0,
-            };
-          })()
-        `);
-      }
-      return { ok: false, error: 'unknown cmd' };
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  });
-
-  /**
-   * Binary-capable fetch for Shaka DRM (m3u8, segments, license).
-   * Bypasses renderer CORS; uses Chromium net + optional direct session.
-   */
   ipcMain.handle('media-fetch', async (_e, payload) => {
     const url = String(payload?.url || '');
     if (!/^https:\/\//i.test(url)) {
       throw new Error('media-fetch: only https');
     }
-    // SC media CDN + license + api + classic sndcdn
     const allowed =
       /soundcloud\.com|soundcloud\.cloud|sndcdn\.com/i.test(url) ||
       url.includes('media-streaming.soundcloud');
@@ -4258,808 +3782,26 @@ app.whenReady().then(async () => {
     );
   }
 
-  /** Dedupe parallel IPC resolves for the same video id */
-  const ytResolveInflight = new Map();
-  /** Short-lived successful resolves (avoid re-browser on replay) */
-  const ytResolveCache = new Map();
-  /** Serialize hidden-browser resolves (parallel windows → ERR_ABORTED) */
-  let ytBrowserQueue = Promise.resolve();
-
-  /**
-   * Resolve a playable audio URL in main process.
-   * Browser intercept (primary) ∥ quick ANDROID → Piped → HTML scrape.
-   */
-  async function ytResolveAudioMain(videoId) {
-    const id = String(videoId || '').trim();
-    if (!/^[a-zA-Z0-9_-]{6,}$/.test(id)) {
-      return { ok: false, error: 'bad video id' };
-    }
-    if (ytResolveInflight.has(id)) {
-      return ytResolveInflight.get(id);
-    }
-    const p = ytResolveAudioMainImpl(id)
-      .then(async (r) => {
-        if (!r?.ok || !r.url || !/^https:\/\//i.test(r.url)) return r;
-        // Probe with the YT partition before handing URL to the player
-        const ytSes = getYtResolveSession();
-        try {
-          const cfg = readProxyConfig();
-          await applyProxyToSession(ytSes, cfg);
-        } catch {
-          /* ignore */
-        }
-        const ok = await probeYtMediaUrl(r.url, ytSes);
-        if (!ok) {
-          // Try defaultSession probe — sometimes works without wrap
-          const okDef = await probeYtMediaUrl(r.url, session.defaultSession);
-          if (okDef) {
-            console.log('[yt-resolve] use direct URL (defaultSession ok)', r.client);
-            return r;
-          }
-          console.warn('[yt-resolve] probe failed both sessions', r.client);
-          // still wrap — player may get a different CDN path via Range
-        }
-        const wrapped = wrapYtStreamForPlayer(r.url, r.mime);
-        if (wrapped !== r.url) {
-          console.log('[yt-resolve] wrap miura-yt', (r.mime || '').slice(0, 40), r.client);
-          return { ...r, url: wrapped, sourceUrl: r.url };
-        }
-        return r;
-      })
-      .finally(() => {
-        ytResolveInflight.delete(id);
-      });
-    ytResolveInflight.set(id, p);
-    return p;
-  }
-
-  async function ytResolveAudioMainImpl(id) {
-
-    const pickUrl = (data, label) => {
-      const sd = data?.streamingData || data?.streaming_data;
-      if (!sd) return null;
-      const formats = [
-        ...(sd.adaptiveFormats || sd.adaptive_formats || []),
-        ...(sd.formats || []),
-      ];
-      const scored = [];
-      for (const f of formats) {
-        const mime = String(f.mimeType || f.mime_type || '');
-        let url = f.url ? String(f.url) : '';
-        // signatureCipher: s=…&sp=sig&url=https%3A%2F%2F…  — url alone is useless without sig
-        // but some clients put a ready URL in .url
-        if (!url && (f.signatureCipher || f.signature_cipher || f.cipher)) {
-          try {
-            const raw = String(f.signatureCipher || f.signature_cipher || f.cipher);
-            const p = new URLSearchParams(raw);
-            // Only use if no `s` param (already signed) — rare
-            if (!p.get('s') && p.get('url')) url = decodeURIComponent(p.get('url'));
-          } catch {
-            /* ignore */
-          }
-        }
-        if (!url.startsWith('http')) continue;
-        const hasAudio =
-          /audio|mp4a|opus|vorbis|webm/i.test(mime) ||
-          f.audioQuality ||
-          f.audioSampleRate ||
-          f.audio_quality;
-        const hasVideo = /^video\//i.test(mime) || (f.width && f.height);
-        // Prefer pure audio m4a for <audio>; video-only is unusable
-        if (!hasAudio && hasVideo && !/itag=(18|22)/i.test(url)) continue;
-        let score = Number(f.bitrate || f.averageBitrate || f.average_bitrate || 0);
-        if (hasAudio && !hasVideo) score += 1e12;
-        else if (hasAudio) score += 1e11;
-        else score += 1e9;
-        // Chromium <audio> is happiest with mp4/mp4a; webm/opus often fails as "not supported"
-        if (/mp4a|audio\/mp4|m4a/i.test(mime)) score += 5e9;
-        else if (/mp4/i.test(mime) && hasAudio) score += 3e9;
-        else if (/opus|audio\/webm/i.test(mime)) score += 5e7;
-        else if (/webm/i.test(mime)) score += 1e7;
-        scored.push({ url, score, mime });
-      }
-      scored.sort((a, b) => b.score - a.score);
-      if (scored[0]?.url) {
-        return {
-          url: scored[0].url,
-          mime: scored[0].mime,
-          protocol: 'progressive',
-          via: label,
-        };
-      }
-      const hls = sd.hlsManifestUrl || sd.hls_manifest_url;
-      if (hls && String(hls).startsWith('http')) {
-        return {
-          url: String(hls),
-          mime: 'application/x-mpegURL',
-          protocol: 'hls',
-          via: label,
-        };
-      }
-      return null;
-    };
-
-    const sessions = [
-      { label: 'proxy', ses: session.defaultSession },
-      { label: 'direct', ses: getDirectMediaSession() },
-    ];
-
-    // yt-dlp-style clients that often return plaintext googlevideo URLs
-    const clients = [
-      {
-        key: 'ANDROID',
-        clientName: 'ANDROID',
-        clientVersion: '19.44.38',
-        clientId: '3',
-        ua: 'com.google.android.youtube/19.44.38 (Linux; U; Android 11) gzip',
-        extra: { androidSdkVersion: 30, osName: 'Android', osVersion: '11' },
-      },
-      {
-        key: 'ANDROID_TESTSUITE',
-        clientName: 'ANDROID_TESTSUITE',
-        clientVersion: '1.9',
-        clientId: '30',
-        ua: 'com.google.android.youtube/1.9 (Linux; U; Android 12) gzip',
-        extra: { androidSdkVersion: 31, osName: 'Android', osVersion: '12' },
-      },
-      {
-        key: 'IOS',
-        clientName: 'IOS',
-        clientVersion: '19.45.4',
-        clientId: '5',
-        ua: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
-        extra: { deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '17.5.1.21F90' },
-      },
-      {
-        key: 'ANDROID_MUSIC',
-        clientName: 'ANDROID_MUSIC',
-        clientVersion: '7.27.52',
-        clientId: '21',
-        ua: 'com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 11) gzip',
-        extra: { androidSdkVersion: 30, osName: 'Android', osVersion: '11' },
-      },
-      {
-        key: 'TVHTML5_SIMPLY',
-        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-        clientVersion: '2.0',
-        clientId: '85',
-        ua: CHROME_UA,
-        extra: {},
-      },
-    ];
-
-    const endpoints = [
-      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-      'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false',
-      'https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false',
-    ];
-
-    const errors = [];
-
-    async function fetchJson(ses, url, init, timeoutMs = 9000) {
-      const doFetch =
-        typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
-      try {
-        const res = await doFetch(url, ctrl ? { ...init, signal: ctrl.signal } : init);
-        const text = await res.text();
-        let data = null;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          /* ignore */
-        }
-        return { status: res.status, data, len: text.length };
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    }
-
-    // Short cache — same track replayed while seeking / double-click
-    const cached = ytResolveCache.get(id);
-    if (cached && cached.exp > Date.now() && cached.result?.ok && cached.result.url) {
-      console.log('[yt-resolve] cache hit', id);
-      return { ...cached.result, client: `${cached.result.client || 'cache'}/cached` };
-    }
-
-    const proxySes = sessions[0];
-
-    // One quick ANDROID try (4s) in parallel with browser — rarely works, never blocks browser
-    const androidPromise = (async () => {
-      const c = clients.find((x) => x.key === 'ANDROID');
-      if (!c) return null;
-      try {
-        const body = {
-          context: {
-            client: {
-              clientName: c.clientName,
-              clientVersion: c.clientVersion,
-              hl: 'en',
-              gl: 'US',
-              timeZone: 'UTC',
-              utcOffsetMinutes: 0,
-              ...c.extra,
-            },
-          },
-          videoId: id,
-          contentCheckOk: true,
-          racyCheckOk: true,
-          playbackContext: {
-            contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' },
-          },
-        };
-        const { data, len } = await fetchJson(
-          proxySes.ses,
-          endpoints[0],
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'User-Agent': c.ua,
-              'X-YouTube-Client-Name': c.clientId,
-              'X-YouTube-Client-Version': c.clientVersion,
-              Origin: 'https://www.youtube.com',
-              Referer: `https://www.youtube.com/watch?v=${id}`,
-            },
-            body: JSON.stringify(body),
-          },
-          4000
-        );
-        if (!data) return null;
-        const picked = pickUrl(data, 'proxy/ANDROID');
-        if (picked) {
-          console.log('[yt-resolve] ok ANDROID', picked.protocol, 'len', len);
-          return { ok: true, ...picked, client: 'proxy/ANDROID' };
-        }
-        const pstat = data.playabilityStatus?.status || '?';
-        const n =
-          (data.streamingData?.adaptiveFormats || []).length +
-          (data.streamingData?.formats || []).length;
-        errors.push(`proxy/ANDROID:${pstat}/fmt${n}`);
-        return null;
-      } catch (e) {
-        errors.push(`proxy/ANDROID:${e?.message || e}`);
-        return null;
-      }
-    })();
-
-    // Primary path: real Chromium (serial queue + one retry on abort)
-    const browserPromise = (async () => {
-      let browserHit = await ytResolveViaHiddenBrowser(id);
-      if (
-        !browserHit?.ok &&
-        /ERR_ABORTED|timeout|aborted/i.test(String(browserHit?.error || ''))
-      ) {
-        console.log('[yt-resolve] browser retry after', browserHit?.error);
-        browserHit = await ytResolveViaHiddenBrowser(id);
-      }
-      return browserHit;
-    })();
-
-    // Whoever wins first with a URL
-    try {
-      const raced = await new Promise((resolve) => {
-        let done = false;
-        const finishRace = (r, via) => {
-          if (done || !r?.ok || !r.url) return;
-          done = true;
-          console.log('[yt-resolve] race win', via, r.client || r.protocol);
-          resolve(r);
-        };
-        androidPromise.then((r) => finishRace(r, 'android')).catch(() => {});
-        browserPromise.then((r) => finishRace(r, 'browser')).catch(() => {});
-        Promise.allSettled([androidPromise, browserPromise]).then(() => {
-          if (!done) resolve(null);
-        });
-      });
-      if (raced?.ok && raced.url) {
-        ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: raced });
-        return raced;
-      }
-    } catch (e) {
-      errors.push(`race:${e?.message || e}`);
-    }
-
-    // Collect browser error if race lost
-    try {
-      const browserHit = await browserPromise;
-      if (browserHit?.ok && browserHit.url) {
-        ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: browserHit });
-        return browserHit;
-      }
-      if (browserHit?.error) errors.push(`browser:${browserHit.error}`);
-    } catch (e) {
-      errors.push(`browser:${e?.message || e}`);
-    }
-
-    // Piped — few instances in parallel (proxy only)
-    const pipedBases = [
-      'https://pipedapi.kavin.rocks',
-      'https://api.piped.private.coffee',
-      'https://pipedapi.adminforge.de',
-      'https://pipedapi.r4fo.com',
-    ];
-    const pipedHit = await new Promise((resolve) => {
-      let left = pipedBases.length;
-      let resolved = false;
-      for (const base of pipedBases) {
-        void (async () => {
-          try {
-            const { data, len } = await fetchJson(
-              proxySes.ses,
-              `${base}/streams/${id}`,
-              {
-                method: 'GET',
-                headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
-              },
-              7000
-            );
-            if (resolved) return;
-            if (!data) {
-              errors.push(`piped:${new URL(base).hostname}:empty`);
-              return;
-            }
-            const audio = Array.isArray(data.audioStreams) ? data.audioStreams : [];
-            const scored = audio
-              .filter((s) => s && typeof s.url === 'string' && s.url.startsWith('http'))
-              .map((s) => {
-                const mime = String(s.mimeType || s.format || '');
-                let score = Number(s.bitrate || 0) || 0;
-                if (/mp4|m4a|mp4a/i.test(mime) || /m4a/i.test(String(s.format || ''))) {
-                  score += 1e6;
-                }
-                return { url: String(s.url), mime, score };
-              })
-              .sort((a, b) => b.score - a.score);
-            if (scored[0]?.url) {
-              resolved = true;
-              console.log('[yt-resolve] ok piped', base, scored[0].mime, 'len', len);
-              resolve({
-                ok: true,
-                url: scored[0].url,
-                mime: scored[0].mime || 'audio/mp4',
-                protocol: 'progressive',
-                client: 'proxy/piped',
-                via: base,
-              });
-              return;
-            }
-            if (data.hls && String(data.hls).startsWith('http')) {
-              resolved = true;
-              resolve({
-                ok: true,
-                url: String(data.hls),
-                mime: 'application/x-mpegURL',
-                protocol: 'hls',
-                client: 'proxy/piped-hls',
-                via: base,
-              });
-              return;
-            }
-            errors.push(`piped:${new URL(base).hostname}:0`);
-          } catch (e) {
-            errors.push(`piped:${e?.message || e}`);
-          } finally {
-            left -= 1;
-            if (left <= 0 && !resolved) resolve(null);
-          }
-        })();
-      }
-    });
-    if (pipedHit?.ok) {
-      ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: pipedHit });
-      return pipedHit;
-    }
-
-    // Last resort: scrape watch HTML (proxy only, one page)
-    try {
-      const pageUrl = `https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`;
-      const doFetch =
-        typeof proxySes.ses.fetch === 'function'
-          ? proxySes.ses.fetch.bind(proxySes.ses)
-          : net.fetch.bind(net);
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 9000);
-      let html = '';
-      try {
-        const res = await doFetch(pageUrl, {
-          method: 'GET',
-          headers: {
-            'User-Agent': CHROME_UA,
-            'Accept-Language': 'en-US,en;q=0.9',
-            Referer: 'https://www.youtube.com/',
-          },
-          signal: ctrl.signal,
-        });
-        html = await res.text();
-      } finally {
-        clearTimeout(timer);
-      }
-      let data = null;
-      const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s);
-      if (m) {
-        try {
-          data = JSON.parse(m[1]);
-        } catch {
-          /* ignore */
-        }
-      }
-      if (data) {
-        const picked = pickUrl(data, 'proxy/html');
-        if (picked) {
-          console.log('[yt-resolve] ok scrape', picked.via, picked.protocol);
-          const hit = { ok: true, ...picked, client: 'proxy/html' };
-          ytResolveCache.set(id, { exp: Date.now() + 8 * 60_000, result: hit });
-          return hit;
-        }
-        const n =
-          (data.streamingData?.adaptiveFormats || []).length +
-          (data.streamingData?.formats || []).length;
-        errors.push(`html:${data.playabilityStatus?.status || '?'}/fmt${n}`);
-      } else {
-        errors.push('html:no-player-json');
-      }
-    } catch (e) {
-      errors.push(`html:${e?.message || e}`);
-    }
-
-    const summary = errors.slice(0, 5).join(' · ') || 'no stream';
-    console.warn('[yt-resolve] failed', id, errors.slice(0, 8).join(' | '));
-    return {
-      ok: false,
-      error: /ERR_ABORTED|timeout|бот|LOGIN|browser:/i.test(summary)
-        ? `YouTube: не удалось открыть поток. Нажми play ещё раз. (${summary.slice(0, 120)})`
-        : `YouTube: нет потока. ${summary.slice(0, 160)}`,
-    };
-  }
-
-  function ytResolveViaHiddenBrowser(videoId) {
-    const run = () => ytResolveViaHiddenBrowserImpl(videoId);
-    const p = ytBrowserQueue.then(run, run);
-    ytBrowserQueue = p.then(
-      () => undefined,
-      () => undefined
-    );
-    return p;
-  }
-
-  /**
-   * Load watch page in a real Chromium window (same proxy as app),
-   * extract player JSON and/or intercept googlevideo audio requests.
-   */
-  function ytResolveViaHiddenBrowserImpl(videoId) {
-    const id = String(videoId || '').trim();
-    return new Promise(async (resolve) => {
-      let settled = false;
-      let win = null;
-      // Warm cookies across resolves (same partition as miura-yt protocol)
-      const ses = getYtResolveSession();
-      try {
-        const cfg = readProxyConfig();
-        await applyProxyToSession(ses, cfg);
-      } catch (e) {
-        console.warn('[yt-resolve] browser proxy', e);
-      }
-      try {
-        ses.setUserAgent(CHROME_UA);
-      } catch {
-        /* ignore */
-      }
-
-      const finish = (result) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        try {
-          ses.webRequest.onBeforeRequest(null);
-        } catch {
-          /* ignore */
-        }
-        try {
-          if (win && !win.isDestroyed()) win.destroy();
-        } catch {
-          /* ignore */
-        }
-        resolve(result);
-      };
-
-      const timer = setTimeout(() => {
-        // Prefer best collected stream over hard fail if we saw any
-        if (candidates.length) {
-          const best = pickBestCandidate(candidates);
-          console.log('[yt-resolve] browser intercept timeout-pick', best.mime, best.url.slice(0, 72));
-          finish({
-            ok: true,
-            url: best.url,
-            mime: best.mime,
-            protocol: 'progressive',
-            client: 'browser-intercept',
-          });
-          return;
-        }
-        finish({ ok: false, error: 'timeout 28s (бот-стена или прокси медленный)' });
-      }, 28000);
-
-      const candidates = [];
-      let settleTimer = null;
-
-      const scoreAudioUrl = (u) => {
-        let s = 0;
-        // Prefer m4a / mp4 audio for <audio>
-        if (/[/&?]itag=141(?:[&/]|$)/.test(u)) s += 1200;
-        else if (/[/&?]itag=140(?:[&/]|$)/.test(u)) s += 1100;
-        else if (/[/&?]itag=139(?:[&/]|$)/.test(u)) s += 900;
-        else if (/[/&?]itag=18(?:[&/]|$)/.test(u)) s += 850; // muxed mp4
-        else if (/[/&?]itag=22(?:[&/]|$)/.test(u)) s += 700;
-        else if (/[/&?]itag=251(?:[&/]|$)/.test(u)) s += 400; // webm opus
-        else if (/[/&?]itag=250(?:[&/]|$)/.test(u)) s += 300;
-        else if (/[/&?]itag=249(?:[&/]|$)/.test(u)) s += 200;
-        if (/mime=audio%2Fmp4|mime=audio\/mp4/i.test(u)) s += 500;
-        if (/mime=audio%2Fwebm|mime=audio\/webm/i.test(u)) s += 80;
-        // Pure video adaptive — almost never playable in <audio>
-        if (/mime=video%2F|mime=video\//i.test(u) && !/[/&?]itag=(18|22)(?:[&/]|$)/.test(u)) s -= 2000;
-        return s;
-      };
-
-      const looksLikeAudio = (u) => {
-        if (!u || !/googlevideo\.com/i.test(u)) return false;
-        if (scoreAudioUrl(u) < 0) return false;
-        if (/mime=audio/i.test(u)) return true;
-        if (/[/&?]itag=(139|140|141|249|250|251|256|258|18|22)(?:[&/]|$)/.test(u)) return true;
-        return false;
-      };
-
-      const cleanMediaUrl = (u) => {
-        try {
-          const url = new URL(u);
-          // Keep signature params; drop range chunks so full track can play
-          url.searchParams.delete('range');
-          url.searchParams.delete('rn');
-          url.searchParams.delete('rbuf');
-          return url.toString();
-        } catch {
-          return String(u).replace(/&range=\d+-\d+/g, '').replace(/&rn=\d+/g, '');
-        }
-      };
-
-      const pickBestCandidate = (list) => {
-        const ranked = list
-          .map((c) => ({ ...c, score: scoreAudioUrl(c.url) }))
-          .filter((c) => c.score >= 0)
-          .sort((a, b) => b.score - a.score);
-        return ranked[0] || list[0];
-      };
-
-      const mimeFromUrl = (u) => {
-        if (/mime=audio%2Fwebm|mime=audio\/webm/i.test(u)) return 'audio/webm';
-        if (/mime=audio%2Fmp4|mime=audio\/mp4|itag=(139|140|141)/i.test(u)) return 'audio/mp4';
-        if (/itag=(18|22)/i.test(u)) return 'video/mp4';
-        return 'audio/mp4';
-      };
-
-      let probing = false;
-      const maybeFinishFromCandidates = (force) => {
-        if (settled || !candidates.length || probing) return;
-        const ranked = candidates
-          .map((c) => ({ ...c, score: scoreAudioUrl(c.url) }))
-          .filter((c) => c.score >= 0)
-          .sort((a, b) => b.score - a.score);
-        if (!ranked.length) return;
-        const great = ranked[0].score >= 900; // m4a / good mp4
-        if (!force && !great && candidates.length < 3) return;
-        if (settleTimer) {
-          clearTimeout(settleTimer);
-          settleTimer = null;
-        }
-        probing = true;
-        void (async () => {
-          try {
-            for (const c of ranked.slice(0, 6)) {
-              if (settled) return;
-              const ok = await probeYtMediaUrl(c.url, ses);
-              if (!ok) continue;
-              console.log(
-                '[yt-resolve] browser intercept',
-                c.mime || mimeFromUrl(c.url),
-                c.url.slice(0, 80)
-              );
-              finish({
-                ok: true,
-                url: c.url,
-                mime: c.mime || mimeFromUrl(c.url),
-                protocol: 'progressive',
-                client: 'browser-intercept',
-              });
-              return;
-            }
-            // Nothing probed OK — still return best raw (outer wrap may retry sessions)
-            if (force && ranked[0] && !settled) {
-              console.log(
-                '[yt-resolve] browser intercept unprobed',
-                ranked[0].url.slice(0, 80)
-              );
-              finish({
-                ok: true,
-                url: ranked[0].url,
-                mime: ranked[0].mime || mimeFromUrl(ranked[0].url),
-                protocol: 'progressive',
-                client: 'browser-intercept',
-              });
-            }
-          } finally {
-            probing = false;
-          }
-        })();
-      };
-
-      try {
-        ses.webRequest.onBeforeRequest({ urls: ['*://*.googlevideo.com/*'] }, (details, cb) => {
-          try {
-            if (!settled && looksLikeAudio(details.url)) {
-              const url = cleanMediaUrl(details.url);
-              if (!candidates.some((c) => c.url === url)) {
-                candidates.push({ url, mime: mimeFromUrl(url) });
-              }
-              // Prefer waiting briefly for m4a (itag 140) instead of first webm
-              if (scoreAudioUrl(url) >= 900) {
-                maybeFinishFromCandidates(true);
-              } else if (!settleTimer) {
-                settleTimer = setTimeout(() => maybeFinishFromCandidates(true), 2500);
-              } else {
-                maybeFinishFromCandidates(false);
-              }
-            }
-          } catch {
-            /* ignore */
-          }
-          cb({});
-        });
-      } catch (e) {
-        finish({ ok: false, error: `webRequest:${e?.message || e}` });
-        return;
-      }
-
-      try {
-        win = new BrowserWindow({
-          show: false,
-          width: 1280,
-          height: 720,
-          webPreferences: {
-            session: ses,
-            nodeIntegration: false,
-            contextIsolation: true,
-            backgroundThrottling: false,
-            sandbox: true,
-          },
-        });
-        try {
-          win.webContents.setAudioMuted(true);
-        } catch {
-          /* ignore */
-        }
-
-        win.webContents.on('did-fail-load', (_e, code, desc) => {
-          if (!settled && code !== -3) {
-            // -3 = aborted
-            console.warn('[yt-resolve] browser fail-load', code, desc);
-          }
-        });
-
-        win.webContents.on('did-finish-load', () => {
-          void (async () => {
-            if (settled) return;
-            try {
-              const extracted = await win.webContents.executeJavaScript(`
-                (function () {
-                  try {
-                    var pr = window.ytInitialPlayerResponse;
-                    if (!pr && window.ytplayer && window.ytplayer.config && window.ytplayer.config.args) {
-                      try {
-                        pr = JSON.parse(window.ytplayer.config.args.player_response || 'null');
-                      } catch (e) {}
-                    }
-                    if (!pr) return { ok: false, err: 'no-pr' };
-                    var sd = pr.streamingData || {};
-                    var formats = [].concat(sd.adaptiveFormats || [], sd.formats || []);
-                    var withUrl = formats.filter(function (f) { return f && f.url; });
-                    var audio = withUrl.filter(function (f) {
-                      var m = String(f.mimeType || '');
-                      return /audio/i.test(m) && !/^video\\//i.test(m);
-                    });
-                    audio.sort(function (a, b) {
-                      var ma = String(a.mimeType || '');
-                      var mb = String(b.mimeType || '');
-                      var sa = /mp4a|audio\\/mp4/i.test(ma) ? 1e9 : /webm|opus/i.test(ma) ? 1e6 : 0;
-                      var sb = /mp4a|audio\\/mp4/i.test(mb) ? 1e9 : /webm|opus/i.test(mb) ? 1e6 : 0;
-                      sa += Number(a.bitrate) || 0;
-                      sb += Number(b.bitrate) || 0;
-                      return sb - sa;
-                    });
-                    // Prefer pure audio; muxed mp4 (itag 18) as fallback — not raw video-only
-                    var muxed = withUrl.filter(function (f) {
-                      var m = String(f.mimeType || '');
-                      return /^video\\/mp4/i.test(m) && /mp4a|audio/i.test(m);
-                    });
-                    var pick = audio[0] || muxed[0] || null;
-                    var hls = sd.hlsManifestUrl || sd.hls_manifest_url || null;
-                    return {
-                      ok: !!(pick && pick.url) || !!(hls && String(hls).indexOf('http') === 0),
-                      url: pick && pick.url ? pick.url : hls,
-                      mime: pick && pick.mimeType ? pick.mimeType : (hls ? 'application/x-mpegURL' : ''),
-                      status: pr.playabilityStatus && pr.playabilityStatus.status,
-                      reason: pr.playabilityStatus && (pr.playabilityStatus.reason || (pr.playabilityStatus.errorScreen && pr.playabilityStatus.status)),
-                      n: formats.length,
-                      nUrl: withUrl.length,
-                      hls: !!hls,
-                    };
-                  } catch (e) {
-                    return { ok: false, err: String(e && e.message || e) };
-                  }
-                })()
-              `);
-              if (extracted?.ok && extracted.url && String(extracted.url).startsWith('http')) {
-                finish({
-                  ok: true,
-                  url: String(extracted.url),
-                  mime: extracted.mime || 'audio/mp4',
-                  protocol: /m3u8|mpegURL/i.test(extracted.mime || extracted.url)
-                    ? 'hls'
-                    : 'progressive',
-                  client: 'browser-pr',
-                });
-                return;
-              }
-              if (extracted?.status) {
-                console.log(
-                  '[yt-resolve] browser pr',
-                  extracted.status,
-                  extracted.reason || '',
-                  'fmt',
-                  extracted.n,
-                  'url',
-                  extracted.nUrl
-                );
-              }
-              // Trigger media requests
-              await win.webContents.executeJavaScript(`
-                (function () {
-                  try {
-                    var v = document.querySelector('video');
-                    if (v) {
-                      v.muted = true;
-                      v.currentTime = 0;
-                      var p = v.play();
-                      if (p && p.catch) p.catch(function () {});
-                      return 'video';
-                    }
-                    var btn = document.querySelector('button.ytp-large-play-button, button.ytp-play-button, button[aria-label*="Play"]');
-                    if (btn) { btn.click(); return 'click'; }
-                    return 'none';
-                  } catch (e) { return 'err'; }
-                })()
-              `);
-            } catch (e) {
-              console.warn('[yt-resolve] browser extract', e?.message || e);
-            }
-          })();
-        });
-
-        await win.loadURL(`https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`, {
-          userAgent: CHROME_UA,
-          httpReferrer: 'https://www.youtube.com/',
-        });
-      } catch (e) {
-        finish({ ok: false, error: e?.message || String(e) });
-      }
-    });
-  }
-
   ipcMain.handle('yt-resolve-audio', async (_e, videoId) => {
     try {
-      return await ytResolveAudioMain(videoId);
+      return await getYtAudio().resolveAudio(videoId);
     } catch (e) {
-      console.error('[yt-resolve]', e);
+      console.error('[yt-audio]', e);
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+  ipcMain.handle('yt-page-play', async (_e, payload) => {
+    try {
+      return await getYtAudio().playPage(payload || {});
+    } catch (e) {
+      console.error('[yt-audio] page', e);
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+  ipcMain.handle('yt-page-command', async (_e, payload) => {
+    try {
+      return await getYtAudio().pageCommand(payload || {});
+    } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   });
@@ -5241,8 +3983,21 @@ app.whenReady().then(async () => {
       }
     }
 
-    // Net-first when explicitly requested
-    if (preferNet) {
+    // Browser-like headers for API writes (likes/reposts) — missing Origin often → 403
+    const isWrite = method === 'PUT' || method === 'POST' || method === 'DELETE';
+    if (isWrite) {
+      if (!headers.Origin && !headers.origin) headers.Origin = 'https://soundcloud.com';
+      if (!headers.Referer && !headers.referer) headers.Referer = 'https://soundcloud.com/';
+      if (!headers['X-Requested-With'] && !headers['x-requested-with']) {
+        headers['X-Requested-With'] = 'XMLHttpRequest';
+      }
+      if (!headers['User-Agent'] && !headers['user-agent']) {
+        headers['User-Agent'] = typeof CHROME_UA !== 'undefined' ? CHROME_UA : 'Mozilla/5.0';
+      }
+    }
+
+    // Net-first when explicitly requested (not for social writes)
+    if (preferNet && !isWrite) {
       try {
         const r = await fetchViaNet(url, method, headers, body === '' ? undefined : body);
         attempts.push(`net:${r.status}`);
@@ -5256,7 +4011,7 @@ app.whenReady().then(async () => {
       }
     }
 
-    // Page-context fetch (best for likes/reposts / writes)
+    // Page-context fetch first for likes/reposts (correct Origin + cookies)
     try {
       const r = await fetchViaScPage(url, method, headers, body, credentialsMode);
       attempts.push(`page:${r.status}`);

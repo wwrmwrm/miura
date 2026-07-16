@@ -3,6 +3,23 @@
 import type { AuthSession } from './types';
 import type { MiuraProfileState } from './lib/miuraProfile';
 
+declare module '*.jpg' {
+  const src: string;
+  export default src;
+}
+declare module '*.jpeg' {
+  const src: string;
+  export default src;
+}
+declare module '*.png' {
+  const src: string;
+  export default src;
+}
+declare module '*.svg' {
+  const src: string;
+  export default src;
+}
+
 export interface ProxyConfig {
   enabled: boolean;
   mode: 'sc' | 'all';
@@ -14,9 +31,9 @@ export interface DiscordPresencePayload {
   artist?: string;
   artworkUrl?: string;
   permalink?: string;
-  /** seconds */
+  
   duration?: number;
-  /** seconds */
+  
   progress?: number;
   playing?: boolean;
 }
@@ -231,9 +248,9 @@ interface Window {
       method?: string;
       headers?: Record<string, string>;
       body?: string | null;
-      /** Skip page cookies; use Chromium net (needed for /media stream exchange) */
+      
       preferNet?: boolean;
-      /** 'omit' avoids stale oauth_token cookie → 401 on media */
+      
       credentials?: 'include' | 'omit';
     }) => Promise<{ status: number; ok: boolean; body: string }>;
     apiUpload: (payload: {
@@ -258,7 +275,7 @@ interface Window {
       bodyBase64: string;
       _via?: string;
     }>;
-    /** YouTube Innertube — main process net (proxy + direct) */
+    
     ytFetch: (payload: {
       url: string;
       method?: string;
@@ -274,7 +291,7 @@ interface Window {
       _via?: string;
       _attempts?: string[];
     }>;
-    /** Main-process Innertube ANDROID/IOS player — plain progressive URLs */
+    
     ytResolveAudio: (videoId: string) => Promise<{
       ok: boolean;
       url?: string;
@@ -283,21 +300,21 @@ interface Window {
       client?: string;
       error?: string;
     }>;
-    /** Hidden YouTube page player (reliable when googlevideo re-fetch 403s) */
-    ytEmbedPlay: (payload: {
+    
+    ytPagePlay: (payload: {
       videoId: string;
       volume?: number;
+      muted?: boolean;
       startAt?: number;
     }) => Promise<{
       ok: boolean;
+      mode?: string;
       duration?: number;
       currentTime?: number;
-      error?: string;
-      via?: string;
-      needsClick?: boolean;
       paused?: boolean;
+      error?: string;
     }>;
-    ytEmbedCommand: (payload: {
+    ytPageCommand: (payload: {
       cmd: 'play' | 'pause' | 'seek' | 'volume' | 'status' | 'stop';
       value?: number;
     }) => Promise<{
@@ -307,6 +324,7 @@ interface Window {
       ended?: boolean;
       currentTime?: number;
       duration?: number;
+      isAd?: boolean;
       error?: string;
     }>;
     scEmbedPlay: (payload: {

@@ -5,12 +5,14 @@ import type { StreamInfo } from '../api/soundcloud';
 import type { PlaybackState, Track } from '../types';
 import type { Playable } from '../player/types';
 import {
+  extractYoutubeVideoId,
   getPlayable,
   getPlayableResolver,
   playableToTrack,
   registerPlayableResolver,
 } from '../player/playableBridge';
 import { resolveYouTubeStreamUrl } from '../sources/youtube';
+import { youtubeUid } from '../player/types';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
@@ -105,15 +107,11 @@ function savePersistedPlayer(data: PersistedPlayer) {
   try {
     localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(data));
   } catch {
-    /* quota / private mode */
+    
   }
 }
 
-/**
- * Shuffle bag: no track repeats until every track in the queue has played once.
- * After a full cycle, the bag resets and a new random order starts
- * (current track is avoided as the first pick of the new cycle when possible).
- */
+
 function pickShuffleNext(
   q: Track[],
   currentId: number,
@@ -121,23 +119,19 @@ function pickShuffleNext(
 ): Track | null {
   if (!q.length) return null;
 
-  // Drop ids that left the queue
   const qIds = new Set(q.map((t) => t.id));
   for (const id of [...played]) {
     if (!qIds.has(id)) played.delete(id);
   }
 
-  // Current should count as already heard this cycle
   played.add(currentId);
 
   let pool = q.filter((t) => !played.has(t.id));
 
-  // Full circle complete → new cycle
   if (!pool.length) {
     played.clear();
     played.add(currentId);
     pool = q.filter((t) => t.id !== currentId);
-    // Single-track queue
     if (!pool.length) {
       const only = q.find((t) => t.id === currentId) ?? q[0] ?? null;
       return only;
@@ -147,7 +141,7 @@ function pickShuffleNext(
   return pool[Math.floor(Math.random() * pool.length)] ?? null;
 }
 
-/** Random among remaining when station extends etc. — prefer unplayed. */
+
 function pickRandomOther(q: Track[], currentId: number): Track | null {
   const others = q.filter((t) => t.id !== currentId);
   if (!others.length) return null;
@@ -157,7 +151,7 @@ function pickRandomOther(q: Track[], currentId: number): Track | null {
 type LoadOpts = {
   autoplay?: boolean;
   startAt?: number;
-  /** When restoring session, don't auto-skip to next on failure */
+  
   skipOnFail?: boolean;
 };
 
@@ -175,15 +169,15 @@ export function usePlayer() {
   const progressRef = useRef(0);
   const restoredRef = useRef(false);
   const persistTimerRef = useRef<number | null>(null);
-  /** Seconds to seek after a deferred stream load (session restore). */
+  
   const pendingSeekRef = useRef(0);
-  /** Track id whose stream is currently attached to <audio>. */
+  
   const streamLoadedForIdRef = useRef<number | null>(null);
-  /** blob: URL for local files — revoke on next load */
+  
   const localBlobUrlRef = useRef<string | null>(null);
-  /** YouTube plays in main-process hidden window (googlevideo re-fetch is 403) */
-  const ytEmbedActiveRef = useRef(false);
-  const ytPollRef = useRef<number | null>(null);
+  
+  const ytPageActiveRef = useRef(false);
+  const ytPagePollRef = useRef<number | null>(null);
 
   const revokeLocalBlob = () => {
     if (localBlobUrlRef.current) {
@@ -196,22 +190,14 @@ export function usePlayer() {
     }
   };
 
-  const stopYtPoll = () => {
-    if (ytPollRef.current != null) {
-      window.clearInterval(ytPollRef.current);
-      ytPollRef.current = null;
+  const stopYtPage = useCallback(async () => {
+    if (ytPagePollRef.current != null) {
+      window.clearInterval(ytPagePollRef.current);
+      ytPagePollRef.current = null;
     }
-  };
-
-  const stopYtEmbed = useCallback(async () => {
-    stopYtPoll();
-    if (!ytEmbedActiveRef.current && !window.electronAPI?.ytEmbedCommand) {
-      ytEmbedActiveRef.current = false;
-      return;
-    }
-    ytEmbedActiveRef.current = false;
+    ytPageActiveRef.current = false;
     try {
-      await window.electronAPI?.ytEmbedCommand?.({ cmd: 'stop' });
+      await window.electronAPI?.ytPageCommand?.({ cmd: 'stop' });
     } catch {
       /* ignore */
     }
@@ -223,13 +209,11 @@ export function usePlayer() {
       ? initial.progress
       : 0;
 
-  // IMPORTANT: init shuffle/repeat refs once from storage — never re-assign from
-  // `initial` on every render (that wiped toggles after the first progress tick).
   const shuffleRef = useRef(Boolean(initial?.shuffle));
   const repeatRef = useRef<RepeatMode>(initial?.repeat ?? 'off');
-  /** Track ids already played in the current shuffle cycle (no repeats until full pass). */
+  
   const shufflePlayedRef = useRef<Set<number>>(new Set());
-  /** Ordered history for shuffle "previous". */
+  
   const shuffleStackRef = useRef<number[]>([]);
 
   const [queue, setQueue] = useState<Track[]>(() => initial?.queue ?? []);
@@ -248,7 +232,6 @@ export function usePlayer() {
   const [shuffle, setShuffle] = useState(() => Boolean(initial?.shuffle));
   const [repeat, setRepeat] = useState<RepeatMode>(() => initial?.repeat ?? 'off');
 
-  // Seed pending seek once from last session (before first play loads stream)
   if (!restoredRef.current && initialProgress > 0 && pendingSeekRef.current === 0) {
     pendingSeekRef.current = initialProgress;
     progressRef.current = initialProgress;
@@ -359,7 +342,6 @@ export function usePlayer() {
     if (shuffleRef.current) {
       const rnd = pickShuffleNext(q, cur.id, shufflePlayedRef.current);
       if (rnd) return rnd;
-      // Only one track / nothing left
       if (repeatRef.current === 'all' || repeatRef.current === 'one') return cur;
       return null;
     }
@@ -374,7 +356,6 @@ export function usePlayer() {
   const attachStream = useCallback(async (audio: HTMLAudioElement, stream: StreamInfo) => {
     destroyHls();
     audio.pause();
-    // Drop previous local blob so memory doesn't leak across tracks
     if (localBlobUrlRef.current && stream.url !== localBlobUrlRef.current) {
       revokeLocalBlob();
     }
@@ -473,7 +454,6 @@ export function usePlayer() {
 
       const autoplay = opts?.autoplay !== false;
       const startAt = opts?.startAt;
-      // YouTube / local: never silently skip — user must see the real error
       const playableHint = getPlayable(track.id);
       const stickySource =
         playableHint?.source === 'youtube' ||
@@ -490,12 +470,10 @@ export function usePlayer() {
       setProgress(typeof startAt === 'number' && startAt > 0 ? startAt : 0);
       progressRef.current = typeof startAt === 'number' && startAt > 0 ? startAt : 0;
       setDuration(track.duration / 1000 || 0);
-      // Count this track in the current shuffle cycle
       markShufflePlayed(track.id);
 
       destroyHls();
-      // Stop previous YouTube embed so two tracks don't overlap
-      await stopYtEmbed();
+      await stopYtPage();
       try {
         audio.pause();
         audio.removeAttribute('src');
@@ -511,14 +489,35 @@ export function usePlayer() {
           track.genre === 'youtube' ||
           Boolean(playableEarly?.uid?.startsWith('yt:'));
 
-        // ——— YouTube: hidden Chromium page (URL re-fetch always 403) ———
-        if (isYouTube && window.electronAPI?.ytEmbedPlay) {
-          const videoId = String(
-            playableEarly?.meta?.videoId ||
-              playableEarly?.uid?.replace(/^yt:/, '') ||
-              ''
-          ).trim();
-          if (!videoId) throw new Error('YouTube: нет video id');
+        if (isYouTube) {
+          let videoId = extractYoutubeVideoId(track, playableEarly);
+          if (!videoId) {
+            const raw = String(track.permalink_url || '');
+            if (raw.startsWith('yt:')) videoId = raw.slice(3).trim();
+          }
+          if (!videoId || !/^[a-zA-Z0-9_-]{6,}$/.test(videoId)) {
+            throw new Error('YouTube: нет video id. Открой трек из поиска YouTube.');
+          }
+
+          if (!playableEarly || !getPlayable(track.id)) {
+            registerPlayableResolver(
+              track.id,
+              {
+                uid: youtubeUid(videoId),
+                source: 'youtube',
+                title: track.title,
+                artist: track.user?.username || '',
+                durationMs: track.duration || 0,
+                artworkUrl: track.artwork_url,
+                meta: { videoId },
+              },
+              async () => {
+                const url = await resolveYouTubeStreamUrl(videoId);
+                const isHls = url.includes('.m3u8') && !url.startsWith('miura-yt:');
+                return { url, protocol: isHls ? 'hls' : 'progressive' };
+              }
+            );
+          }
 
           const seekTo =
             typeof startAt === 'number' && startAt > 1
@@ -528,10 +527,24 @@ export function usePlayer() {
                 : 0;
           pendingSeekRef.current = 0;
 
-          const r = await Promise.race([
-            window.electronAPI.ytEmbedPlay({
+          try {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          } catch {
+            /* ignore */
+          }
+
+          if (!window.electronAPI?.ytPagePlay) {
+            throw new Error(
+              'YouTube: перезапусти miura полностью (закрой окно и npm run dev) — нет ytPagePlay'
+            );
+          }
+          const pr = await Promise.race([
+            window.electronAPI.ytPagePlay({
               videoId,
               volume: mutedRef.current ? 0 : volumeRef.current,
+              muted: mutedRef.current,
               startAt: seekTo,
             }),
             new Promise<{ ok: false; error: string }>((resolve) => {
@@ -540,42 +553,45 @@ export function usePlayer() {
                   resolve({
                     ok: false,
                     error:
-                      'YouTube: таймаут загрузки. Проверь SOCKS «весь трафик» и нажми play ещё раз.',
+                      'YouTube: таймаут 30с. Проверь SOCKS «весь трафик» (настройки miura → прокси).',
                   }),
-                38_000
+                30_000
               );
             }),
           ]);
-          if (!r?.ok) {
-            throw new Error(r?.error || 'YouTube: не удалось запустить плеер');
-          }
-          if (r && 'needsClick' in r && (r as { needsClick?: boolean }).needsClick) {
-            console.warn('[yt] embed needs click in mini window');
+          if (!pr?.ok) {
+            throw new Error(pr?.error || 'YouTube: не удалось запустить');
           }
 
-          ytEmbedActiveRef.current = true;
+          ytPageActiveRef.current = true;
+          setError(null);
+          setState(autoplay ? 'playing' : 'paused');
           streamLoadedForIdRef.current = track.id;
           const dur =
-            (r.duration && r.duration > 0 ? r.duration : track.duration / 1000) || 0;
+            (pr.duration && pr.duration > 0 ? pr.duration : track.duration / 1000) || 0;
           setDuration(dur);
-          setProgress(typeof r.currentTime === 'number' ? r.currentTime : seekTo || 0);
-          progressRef.current = typeof r.currentTime === 'number' ? r.currentTime : seekTo || 0;
+          const t0 = typeof pr.currentTime === 'number' ? pr.currentTime : seekTo || 0;
+          setProgress(t0);
+          progressRef.current = t0;
 
-          stopYtPoll();
-          ytPollRef.current = window.setInterval(() => {
+          if (ytPagePollRef.current != null) window.clearInterval(ytPagePollRef.current);
+          ytPagePollRef.current = window.setInterval(() => {
             void (async () => {
-              if (!ytEmbedActiveRef.current) return;
+              if (!ytPageActiveRef.current) return;
               try {
-                const s = await window.electronAPI?.ytEmbedCommand?.({ cmd: 'status' });
+                const s = await window.electronAPI?.ytPageCommand?.({ cmd: 'status' });
                 if (!s?.ok) return;
+                if (s.isAd) return; // mute ads; ignore progress
                 if (s.duration && s.duration > 0) setDuration(s.duration);
                 const t = Number(s.currentTime) || 0;
                 setProgress(t);
                 progressRef.current = t;
                 if (s.ended) {
-                  stopYtPoll();
-                  ytEmbedActiveRef.current = false;
-                  // Mirror <audio> ended → next track
+                  if (ytPagePollRef.current != null) {
+                    window.clearInterval(ytPagePollRef.current);
+                    ytPagePollRef.current = null;
+                  }
+                  ytPageActiveRef.current = false;
                   const q = queueRef.current;
                   const cur = currentRef.current;
                   if (!q.length || !cur) {
@@ -588,38 +604,32 @@ export function usePlayer() {
                   }
                   const idx = q.findIndex((x) => x.id === cur.id);
                   const next = idx >= 0 ? q[idx + 1] : null;
-                  if (next) {
-                    void loadAndPlayRef.current(next);
-                    return;
-                  }
-                  if (repeatRef.current !== 'off' && q[0]) {
-                    void loadAndPlayRef.current(q[0]);
-                    return;
-                  }
-                  setState('paused');
+                  if (next) void loadAndPlayRef.current(next);
+                  else if (repeatRef.current !== 'off' && q[0]) void loadAndPlayRef.current(q[0]);
+                  else setState('paused');
                 } else if (s.paused === false) {
                   setState('playing');
+                } else if (s.paused === true) {
+                  setState('paused');
                 }
               } catch {
-                /* ignore poll errors */
+                /* ignore */
               }
             })();
-          }, 450);
+          }, 400);
 
           skipFailCountRef.current = 0;
           if (autoplay) {
             setState('playing');
-            // ensure playing if page paused after load
-            void window.electronAPI.ytEmbedCommand?.({ cmd: 'play' });
+            void window.electronAPI.ytPageCommand?.({ cmd: 'play' });
           } else {
-            void window.electronAPI.ytEmbedCommand?.({ cmd: 'pause' });
+            void window.electronAPI.ytPageCommand?.({ cmd: 'pause' });
             setState('paused');
           }
           schedulePersist();
           return;
         }
 
-        // Multi-source: local / custom resolver, else SoundCloud open streams
         let stream: StreamInfo;
         const external = getPlayableResolver(track.id);
         if (external) {
@@ -639,8 +649,6 @@ export function usePlayer() {
         audio.volume = mutedRef.current ? 0 : volumeRef.current;
         audio.muted = mutedRef.current;
 
-        // Only seek when caller asked (restore/toggle). Don't apply stale pendingSeek
-        // when user starts a different track via playTrack.
         const seekTo = typeof startAt === 'number' && startAt > 1 ? startAt : 0;
         if (seekTo > 0) pendingSeekRef.current = 0;
 
@@ -689,7 +697,6 @@ export function usePlayer() {
           setError(msg);
           return;
         }
-        // DRM / protected — tell user clearly, do not open browser/widgets
         if (/DRM|encrypted|Widevine|только с DRM/i.test(msg)) {
           setState('error');
           setError(msg);
@@ -714,7 +721,7 @@ export function usePlayer() {
         setError(msg);
       }
     },
-    [attachStream, maybeExtendStation, schedulePersist, markShufflePlayed, stopYtEmbed]
+    [attachStream, maybeExtendStation, schedulePersist, markShufflePlayed, stopYtPage]
   );
 
   loadAndPlayRef.current = loadAndPlay;
@@ -777,6 +784,11 @@ export function usePlayer() {
       persistNow();
     };
     const onErr = () => {
+      if (ytPageActiveRef.current) return;
+      const t = currentRef.current;
+      if (t && (t.genre === 'youtube' || getPlayable(t.id)?.source === 'youtube')) {
+        return;
+      }
       setState('error');
       setError('Ошибка воспроизведения');
     };
@@ -793,9 +805,6 @@ export function usePlayer() {
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('error', onErr);
 
-    // Restore last session in UI only — do NOT resolve stream yet.
-    // SC progressive URLs expire; early restore also races auth/client_id boot.
-    // Fresh stream is fetched on first play (see toggle).
     const restoreTrack = initial?.current ?? null;
     if (!restoredRef.current && restoreTrack) {
       restoredRef.current = true;
@@ -822,11 +831,9 @@ export function usePlayer() {
         window.clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
       }
-      stopYtPoll();
-      ytEmbedActiveRef.current = false;
-      void window.electronAPI?.ytEmbedCommand?.({ cmd: 'stop' });
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('beforeunload', flush);
+      void stopYtPage();
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
@@ -850,7 +857,6 @@ export function usePlayer() {
         stationModeRef.current = false;
         setStationSeed(null);
       }
-      // Fresh pick from library/search — don't keep restored seek position
       if (currentRef.current?.id !== track.id) {
         pendingSeekRef.current = 0;
       }
@@ -858,7 +864,6 @@ export function usePlayer() {
         const cleaned = list.filter((t) => t && t.id && t.title);
         setQueue(cleaned);
         queueRef.current = cleaned;
-        // New playlist/queue → new shuffle cycle
         resetShuffleBag(track.id);
       } else if (!queueRef.current.find((t) => t.id === track.id)) {
         const next = [...queueRef.current, track];
@@ -901,7 +906,6 @@ export function usePlayer() {
       }
       if (p.source === 'youtube') {
         const videoId = String(p.meta?.videoId || p.uid.replace(/^yt:/, ''));
-        // One automatic retry — some videos abort the hidden browser on first try
         const resolveOnce = () => resolveYouTubeStreamUrl(videoId);
         const withTimeout = (p: Promise<string>, ms: number) =>
           Promise.race([
@@ -939,7 +943,7 @@ export function usePlayer() {
     return track;
   }, []);
 
-  /** Play a multi-source item (local / YouTube / …) inside the same player core. */
+  
   const playPlayable = useCallback(
     (item: Playable, list?: Playable[]) => {
       void (async () => {
@@ -1008,7 +1012,6 @@ export function usePlayer() {
     }
     if (stationModeRef.current) {
       void maybeExtendStation(cur);
-      // Prefer unplayed if shuffle bag active
       const rnd = shuffleRef.current
         ? pickShuffleNext(q, cur.id, shufflePlayedRef.current)
         : pickRandomOther(q, cur.id);
@@ -1019,8 +1022,8 @@ export function usePlayer() {
   }, [loadAndPlay, maybeExtendStation]);
 
   const playPrev = useCallback(() => {
-    if (ytEmbedActiveRef.current && progressRef.current > 3) {
-      void window.electronAPI?.ytEmbedCommand?.({ cmd: 'seek', value: 0 });
+    if (ytPageActiveRef.current && progressRef.current > 3) {
+      void window.electronAPI?.ytPageCommand?.({ cmd: 'seek', value: 0 });
       progressRef.current = 0;
       setProgress(0);
       return;
@@ -1034,20 +1037,17 @@ export function usePlayer() {
     const cur = currentRef.current;
     if (!q.length || !cur) return;
     if (shuffleRef.current) {
-      // Go back along shuffle history instead of random jump
       const stack = shuffleStackRef.current;
       const at = stack.lastIndexOf(cur.id);
       if (at > 0) {
         const prevId = stack[at - 1]!;
         const prev = q.find((t) => t.id === prevId);
         if (prev) {
-          // Trim stack so "next" after going back continues forward cleanly
           shuffleStackRef.current = stack.slice(0, at);
           void loadAndPlay(prev);
           return;
         }
       }
-      // No history — stay on first of cycle / previous in queue order
       const idx = q.findIndex((t) => t.id === cur.id);
       const prev = q[idx - 1];
       if (prev) void loadAndPlay(prev);
@@ -1063,16 +1063,15 @@ export function usePlayer() {
     const track = currentRef.current;
     if (!track) return;
 
-    // YouTube embed path
-    if (ytEmbedActiveRef.current && streamLoadedForIdRef.current === track.id) {
+    if (ytPageActiveRef.current && streamLoadedForIdRef.current === track.id) {
       void (async () => {
         try {
-          const s = await window.electronAPI?.ytEmbedCommand?.({ cmd: 'status' });
+          const s = await window.electronAPI?.ytPageCommand?.({ cmd: 'status' });
           if (s && s.paused === false) {
-            await window.electronAPI?.ytEmbedCommand?.({ cmd: 'pause' });
+            await window.electronAPI?.ytPageCommand?.({ cmd: 'pause' });
             setState('paused');
           } else {
-            await window.electronAPI?.ytEmbedCommand?.({ cmd: 'play' });
+            await window.electronAPI?.ytPageCommand?.({ cmd: 'play' });
             setState('playing');
           }
           persistNow();
@@ -1095,7 +1094,6 @@ export function usePlayer() {
       return;
     }
 
-    // After restore / expired CDN URL / failed attach — fetch a fresh stream
     const needsFreshStream =
       streamLoadedForIdRef.current !== track.id ||
       !audio.currentSrc ||
@@ -1116,23 +1114,21 @@ export function usePlayer() {
       .play()
       .then(() => setState('playing'))
       .catch(() => {
-        // Stale signed URL — re-resolve stream and play again
         const startAt = progressRef.current > 1 ? progressRef.current : 0;
         void loadAndPlay(track, { autoplay: true, startAt, skipOnFail: true });
       });
   }, [loadAndPlay, persistNow]);
 
   const seek = useCallback((time: number) => {
-    if (ytEmbedActiveRef.current) {
+    if (ytPageActiveRef.current) {
       progressRef.current = time;
       setProgress(time);
-      void window.electronAPI?.ytEmbedCommand?.({ cmd: 'seek', value: time });
+      void window.electronAPI?.ytPageCommand?.({ cmd: 'seek', value: time });
       schedulePersist();
       return;
     }
     const audio = audioRef.current;
     if (!audio) return;
-    // Stream not loaded yet (restored session) — remember position for first play
     if (streamLoadedForIdRef.current !== currentRef.current?.id || !audio.currentSrc) {
       pendingSeekRef.current = time;
       progressRef.current = time;
@@ -1152,8 +1148,8 @@ export function usePlayer() {
       const clamped = Math.min(1, Math.max(0, v));
       volumeRef.current = clamped;
       setVolumeState(clamped);
-      if (ytEmbedActiveRef.current) {
-        void window.electronAPI?.ytEmbedCommand?.({
+      if (ytPageActiveRef.current) {
+        void window.electronAPI?.ytPageCommand?.({
           cmd: 'volume',
           value: mutedRef.current ? 0 : clamped,
         });
@@ -1177,8 +1173,8 @@ export function usePlayer() {
     mutedRef.current = next;
     setIsMuted(next);
     if (audio) audio.muted = next;
-    if (ytEmbedActiveRef.current) {
-      void window.electronAPI?.ytEmbedCommand?.({
+    if (ytPageActiveRef.current) {
+      void window.electronAPI?.ytPageCommand?.({
         cmd: 'volume',
         value: next ? 0 : volumeRef.current,
       });
@@ -1191,7 +1187,6 @@ export function usePlayer() {
       const next = !s;
       shuffleRef.current = next;
       if (next) {
-        // Fresh bag: current track counts as already played this cycle
         resetShuffleBag(currentRef.current?.id ?? null);
       } else {
         resetShuffleBag(null);
@@ -1231,7 +1226,7 @@ export function usePlayer() {
     [registerPlayableStream, addToQueue]
   );
 
-  /** Insert right after currently playing track */
+  
   const addNext = useCallback(
     (track: Track) => {
       setQueue((q) => {

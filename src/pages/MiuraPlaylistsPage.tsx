@@ -28,6 +28,7 @@ import type { Playable } from '../player/types';
 import { hashUid } from '../player/playableBridge';
 import { SourceBadge } from '../components/SourceBadge';
 import { VirtualList } from '../components/VirtualList';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 type Props = {
   onPlayTrack: (track: Track, list?: Track[]) => void;
@@ -70,6 +71,7 @@ export function MiuraPlaylistsPage({
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const cancelRef = useRef(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -649,12 +651,7 @@ export function MiuraPlaylistsPage({
           className="miura-pl-ico danger"
           title={t.common.remove}
           disabled={importing}
-          onClick={() => {
-            if (!window.confirm(t.playlists.deleteConfirm.replace('{title}', active.title))) return;
-            deletePlaylist(active.id);
-            selectPlaylist(null);
-            refresh();
-          }}
+          onClick={() => setDeleteOpen(true)}
         >
           <IconTrash />
         </button>
@@ -809,6 +806,34 @@ export function MiuraPlaylistsPage({
           onStart={() => void runImport()}
           onPickFile={() => fileRef.current?.click()}
           addMode
+        />
+      )}
+
+      {deleteOpen && active && (
+        <ConfirmModal
+          title={t.common.remove}
+          message={
+            <>
+              {t.playlists.deleteConfirm.includes('{title}') ? (
+                <>
+                  {t.playlists.deleteConfirm.split('{title}')[0].replace(/[«“]\s*$/, '')}
+                  <strong>«{active.title}»</strong>
+                  {(t.playlists.deleteConfirm.split('{title}')[1] || '').replace(/^\s*[»”]/, '')}
+                </>
+              ) : (
+                t.playlists.deleteConfirm
+              )}
+            </>
+          }
+          confirmLabel={t.common.remove}
+          cancelLabel={t.common.cancel}
+          onClose={() => setDeleteOpen(false)}
+          onConfirm={() => {
+            deletePlaylist(active.id);
+            setDeleteOpen(false);
+            selectPlaylist(null);
+            refresh();
+          }}
         />
       )}
     </div>

@@ -289,6 +289,7 @@ async function setPresence(payload) {
     };
   }
 
+  // Optional track link only (no GitHub button for now)
   const link = String(payload.permalink || '').trim();
   if (link.startsWith('http')) {
     const label =

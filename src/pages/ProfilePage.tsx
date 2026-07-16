@@ -408,10 +408,6 @@ export function ProfilePage({
                   {scConnected ? t.common.open : t.settings.signInBtn}
                 </button>
               </li>
-              <li>
-                <span className="miura-service-name">YouTube</span>
-                <span className="miura-service-status">{t.profile.noLoginNeeded}</span>
-              </li>
             </ul>
           </div>
           <div className="settings-card miura-profile-danger">

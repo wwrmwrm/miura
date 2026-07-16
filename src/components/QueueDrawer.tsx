@@ -58,7 +58,8 @@ export function QueueDrawer({ open, onClose, queue, currentId, onPlay, onRemove,
                     )}
                     <span className="queue-drawer-meta">
                       <span className="queue-drawer-title">
-                        {tr.title} <SourceBadge track={tr} />
+                        <span className="queue-drawer-title-text">{tr.title}</span>
+                        <SourceBadge track={tr} />
                       </span>
                       <span className="queue-drawer-artist">
                         {tr.user?.username || tr.user?.full_name || '—'}
