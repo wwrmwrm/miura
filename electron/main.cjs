@@ -2268,9 +2268,16 @@ function toMiuraFileUrl(absPath) {
   return pathToFileURL(resolved).href.replace(/^file:/i, 'miura-file:');
 }
 
+/** Same partition as the hidden YT browser — cookies + proxy for googlevideo. */
+const YT_RESOLVE_PARTITION = 'persist:miura-yt-resolve';
+
+function getYtResolveSession() {
+  return session.fromPartition(YT_RESOLVE_PARTITION);
+}
+
 /**
- * googlevideo URLs often 403 / "not supported" in <audio> without YT referer
- * and the same Chromium proxy session. Serve them via miura-yt://.
+ * googlevideo often 403s from defaultSession. Proxy through the YT resolve
+ * partition (cookies from the hidden browser) via miura-yt://.
  */
 function wrapYtStreamForPlayer(url, mime) {
   const u = String(url || '');
@@ -2284,6 +2291,39 @@ function wrapYtStreamForPlayer(url, mime) {
   q.set('u', u);
   if (mime) q.set('m', String(mime).split(';')[0].trim());
   return `miura-yt://play/?${q.toString()}`;
+}
+
+/** Quick Range probe so we don't hand the player a 403 URL. */
+async function probeYtMediaUrl(url, ses) {
+  try {
+    const doFetch =
+      typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
+    const res = await doFetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': CHROME_UA,
+        Referer: 'https://www.youtube.com/',
+        Origin: 'https://www.youtube.com',
+        Accept: '*/*',
+        Range: 'bytes=0-2047',
+      },
+      bypassCustomProtocolHandlers: true,
+    });
+    if (res.ok || res.status === 206) {
+      try {
+        // drain a bit so connection isn't left hanging
+        await res.arrayBuffer();
+      } catch {
+        /* ignore */
+      }
+      return true;
+    }
+    console.warn('[yt-resolve] probe fail', res.status, url.slice(0, 72));
+    return false;
+  } catch (e) {
+    console.warn('[yt-resolve] probe err', e?.message || e);
+    return false;
+  }
 }
 
 function registerYtMediaProtocol() {
@@ -2312,15 +2352,37 @@ function registerYtMediaProtocol() {
           /* ignore */
         }
 
-        const ses = session.defaultSession;
+        // MUST use the same partition as the hidden browser (not defaultSession)
+        const ses = getYtResolveSession();
+        try {
+          const cfg = readProxyConfig();
+          await applyProxyToSession(ses, cfg);
+        } catch {
+          /* already applied */
+        }
+
         const doFetch =
           typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-        const res = await doFetch(target, {
+        let res = await doFetch(target, {
           method: 'GET',
           headers,
-          // avoid recursion if any
           bypassCustomProtocolHandlers: true,
         });
+
+        // Fallback: defaultSession (sometimes CDN is happier there)
+        if (!res.ok && res.status !== 206) {
+          console.warn('[miura-yt] yt-ses', res.status, '→ try defaultSession');
+          try {
+            await res.arrayBuffer();
+          } catch {
+            /* ignore */
+          }
+          const def = session.defaultSession;
+          res = await (typeof def.fetch === 'function' ? def.fetch.bind(def) : net.fetch.bind(net))(
+            target,
+            { method: 'GET', headers, bypassCustomProtocolHandlers: true }
+          );
+        }
 
         const out = new Headers();
         const ct =
@@ -2335,7 +2397,6 @@ function registerYtMediaProtocol() {
         if (cr) out.set('Content-Range', cr);
         const ar = res.headers.get('Accept-Ranges') || res.headers.get('accept-ranges');
         out.set('Accept-Ranges', ar || 'bytes');
-        // Help <audio> CORS-ish checks inside Electron
         out.set('Access-Control-Allow-Origin', '*');
 
         if (!res.ok && res.status !== 206) {
@@ -3868,13 +3929,31 @@ app.whenReady().then(async () => {
       return ytResolveInflight.get(id);
     }
     const p = ytResolveAudioMainImpl(id)
-      .then((r) => {
-        if (r?.ok && r.url && /^https:\/\//i.test(r.url)) {
-          const wrapped = wrapYtStreamForPlayer(r.url, r.mime);
-          if (wrapped !== r.url) {
-            console.log('[yt-resolve] wrap miura-yt', (r.mime || '').slice(0, 40), r.client);
-            return { ...r, url: wrapped, sourceUrl: r.url };
+      .then(async (r) => {
+        if (!r?.ok || !r.url || !/^https:\/\//i.test(r.url)) return r;
+        // Probe with the YT partition before handing URL to the player
+        const ytSes = getYtResolveSession();
+        try {
+          const cfg = readProxyConfig();
+          await applyProxyToSession(ytSes, cfg);
+        } catch {
+          /* ignore */
+        }
+        const ok = await probeYtMediaUrl(r.url, ytSes);
+        if (!ok) {
+          // Try defaultSession probe — sometimes works without wrap
+          const okDef = await probeYtMediaUrl(r.url, session.defaultSession);
+          if (okDef) {
+            console.log('[yt-resolve] use direct URL (defaultSession ok)', r.client);
+            return r;
           }
+          console.warn('[yt-resolve] probe failed both sessions', r.client);
+          // still wrap — player may get a different CDN path via Range
+        }
+        const wrapped = wrapYtStreamForPlayer(r.url, r.mime);
+        if (wrapped !== r.url) {
+          console.log('[yt-resolve] wrap miura-yt', (r.mime || '').slice(0, 40), r.client);
+          return { ...r, url: wrapped, sourceUrl: r.url };
         }
         return r;
       })
@@ -4305,9 +4384,8 @@ app.whenReady().then(async () => {
     return new Promise(async (resolve) => {
       let settled = false;
       let win = null;
-      // Warm cookies across resolves (faster than fresh temp: each time)
-      const partition = 'persist:miura-yt-resolve';
-      const ses = session.fromPartition(partition);
+      // Warm cookies across resolves (same partition as miura-yt protocol)
+      const ses = getYtResolveSession();
       try {
         const cfg = readProxyConfig();
         await applyProxyToSession(ses, cfg);
@@ -4411,23 +4489,59 @@ app.whenReady().then(async () => {
         return 'audio/mp4';
       };
 
+      let probing = false;
       const maybeFinishFromCandidates = (force) => {
-        if (settled || !candidates.length) return;
-        const best = pickBestCandidate(candidates);
-        const great = scoreAudioUrl(best.url) >= 900; // m4a / good mp4
+        if (settled || !candidates.length || probing) return;
+        const ranked = candidates
+          .map((c) => ({ ...c, score: scoreAudioUrl(c.url) }))
+          .filter((c) => c.score >= 0)
+          .sort((a, b) => b.score - a.score);
+        if (!ranked.length) return;
+        const great = ranked[0].score >= 900; // m4a / good mp4
         if (!force && !great && candidates.length < 3) return;
         if (settleTimer) {
           clearTimeout(settleTimer);
           settleTimer = null;
         }
-        console.log('[yt-resolve] browser intercept', best.mime || mimeFromUrl(best.url), best.url.slice(0, 80));
-        finish({
-          ok: true,
-          url: best.url,
-          mime: best.mime || mimeFromUrl(best.url),
-          protocol: 'progressive',
-          client: 'browser-intercept',
-        });
+        probing = true;
+        void (async () => {
+          try {
+            for (const c of ranked.slice(0, 6)) {
+              if (settled) return;
+              const ok = await probeYtMediaUrl(c.url, ses);
+              if (!ok) continue;
+              console.log(
+                '[yt-resolve] browser intercept',
+                c.mime || mimeFromUrl(c.url),
+                c.url.slice(0, 80)
+              );
+              finish({
+                ok: true,
+                url: c.url,
+                mime: c.mime || mimeFromUrl(c.url),
+                protocol: 'progressive',
+                client: 'browser-intercept',
+              });
+              return;
+            }
+            // Nothing probed OK — still return best raw (outer wrap may retry sessions)
+            if (force && ranked[0] && !settled) {
+              console.log(
+                '[yt-resolve] browser intercept unprobed',
+                ranked[0].url.slice(0, 80)
+              );
+              finish({
+                ok: true,
+                url: ranked[0].url,
+                mime: ranked[0].mime || mimeFromUrl(ranked[0].url),
+                protocol: 'progressive',
+                client: 'browser-intercept',
+              });
+            }
+          } finally {
+            probing = false;
+          }
+        })();
       };
 
       try {
@@ -4442,7 +4556,7 @@ app.whenReady().then(async () => {
               if (scoreAudioUrl(url) >= 900) {
                 maybeFinishFromCandidates(true);
               } else if (!settleTimer) {
-                settleTimer = setTimeout(() => maybeFinishFromCandidates(true), 2200);
+                settleTimer = setTimeout(() => maybeFinishFromCandidates(true), 2500);
               } else {
                 maybeFinishFromCandidates(false);
               }
