@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   mediaFetch: (payload) => ipcRenderer.invoke('media-fetch', payload),
   /** YouTube / Innertube (main process, proxy + direct fallback) */
   ytFetch: (payload) => ipcRenderer.invoke('yt-fetch', payload),
+  ytResolveAudio: (videoId) => ipcRenderer.invoke('yt-resolve-audio', videoId),
   /** Official SC embed window (legacy; prefer native DRM) */
   scEmbedPlay: (payload) => ipcRenderer.invoke('sc-embed-play', payload),
   scEmbedCommand: (payload) => ipcRenderer.invoke('sc-embed-command', payload),

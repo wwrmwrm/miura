@@ -3708,6 +3708,165 @@ app.whenReady().then(async () => {
     }
   });
 
+  function isYtAllowedHost(host) {
+    const h = String(host || '').toLowerCase();
+    return (
+      /(^|\.)youtube\.com$/.test(h) ||
+      /(^|\.)youtu\.be$/.test(h) ||
+      /(^|\.)googlevideo\.com$/.test(h) ||
+      /(^|\.)ytimg\.com$/.test(h) ||
+      /(^|\.)ggpht\.com$/.test(h) ||
+      /(^|\.)googleusercontent\.com$/.test(h) ||
+      /(^|\.)googleapis\.com$/.test(h) ||
+      /(^|\.)gstatic\.com$/.test(h) ||
+      /(^|\.)youtube-nocookie\.com$/.test(h) ||
+      /(^|\.)yt\.be$/.test(h) ||
+      /(^|\.)google\.com$/.test(h) ||
+      /(^|\.)youtubei\.googleapis\.com$/.test(h) ||
+      /(^|\.)youtube-ui\.l\.google\.com$/.test(h)
+    );
+  }
+
+  /**
+   * Direct Innertube player resolve in main — ANDROID often returns plain progressive URLs
+   * without signature decipher (fixes "No valid URL to decipher" in renderer youtubei).
+   */
+  async function ytResolveAudioMain(videoId) {
+    const id = String(videoId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{6,}$/.test(id)) {
+      return { ok: false, error: 'bad video id' };
+    }
+    const clients = [
+      {
+        name: 'ANDROID',
+        version: '21.03.36',
+        ua: 'com.google.android.youtube/21.03.36 (Linux; U; Android 14; en_US) gzip',
+        clientId: '3',
+      },
+      {
+        name: 'IOS',
+        version: '20.11.6',
+        ua: 'com.google.ios.youtube/20.11.6 (iPhone16,2; U; CPU iOS 17_5 like Mac OS X)',
+        clientId: '5',
+      },
+      {
+        name: 'ANDROID_MUSIC',
+        version: '7.27.52',
+        ua: 'com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14) gzip',
+        clientId: '21',
+      },
+      {
+        name: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+        version: '2.0',
+        ua: CHROME_UA,
+        clientId: '85',
+      },
+    ];
+
+    const doFetch =
+      typeof session.defaultSession.fetch === 'function'
+        ? session.defaultSession.fetch.bind(session.defaultSession)
+        : net.fetch.bind(net);
+
+    const pickUrl = (data) => {
+      const sd = data?.streamingData || data?.streaming_data;
+      if (!sd) return null;
+      const formats = [...(sd.adaptiveFormats || sd.adaptive_formats || []), ...(sd.formats || [])];
+      // Prefer audio-only mp4/m4a with plain url (no signatureCipher)
+      const scored = formats
+        .map((f) => {
+          const mime = String(f.mimeType || f.mime_type || '');
+          const url = f.url ? String(f.url) : '';
+          const hasAudio = /audio|mp4a|opus|vorbis/i.test(mime) || f.audioQuality || f.audioSampleRate;
+          const hasVideo = /video\//i.test(mime) && !/audio/i.test(mime);
+          let score = Number(f.bitrate || f.averageBitrate || 0);
+          if (url.startsWith('http') && hasAudio && !hasVideo) score += 1e12;
+          else if (url.startsWith('http') && hasAudio) score += 1e11;
+          else if (url.startsWith('http')) score += 1e9;
+          else score = -1;
+          if (/mp4|mp4a|m4a/i.test(mime)) score += 1e6;
+          return { url, score, mime };
+        })
+        .filter((x) => x.score > 0 && x.url.startsWith('http'))
+        .sort((a, b) => b.score - a.score);
+      if (scored[0]?.url) return { url: scored[0].url, mime: scored[0].mime, protocol: 'progressive' };
+      // HLS
+      const hls = sd.hlsManifestUrl || sd.hls_manifest_url;
+      if (hls && String(hls).startsWith('http')) {
+        return { url: String(hls), mime: 'application/x-mpegURL', protocol: 'hls' };
+      }
+      return null;
+    };
+
+    const errors = [];
+    for (const c of clients) {
+      try {
+        const body = {
+          context: {
+            client: {
+              clientName: c.name,
+              clientVersion: c.version,
+              hl: 'en',
+              gl: 'US',
+              androidSdkVersion: 34,
+              osName: c.name.includes('IOS') ? 'iOS' : 'Android',
+              osVersion: '14',
+            },
+          },
+          videoId: id,
+          contentCheckOk: true,
+          racyCheckOk: true,
+        };
+        const url = `https://www.youtube.com/youtubei/v1/player?prettyPrint=false`;
+        const res = await doFetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': c.ua,
+            'X-YouTube-Client-Name': c.clientId,
+            'X-YouTube-Client-Version': c.version,
+            Origin: 'https://www.youtube.com',
+            Referer: 'https://www.youtube.com/',
+          },
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          errors.push(`${c.name}:bad-json`);
+          continue;
+        }
+        const status = data?.playabilityStatus?.status || data?.playability_status?.status;
+        if (status && status !== 'OK') {
+          errors.push(`${c.name}:${status}`);
+          continue;
+        }
+        const picked = pickUrl(data);
+        if (picked) {
+          console.log('[yt-resolve] ok', c.name, picked.protocol, (picked.mime || '').slice(0, 40));
+          return { ok: true, ...picked, client: c.name };
+        }
+        const n =
+          (data?.streamingData?.adaptiveFormats || []).length +
+          (data?.streamingData?.formats || []).length;
+        errors.push(`${c.name}:no-url(${n})`);
+      } catch (e) {
+        errors.push(`${c.name}:${e?.message || e}`);
+      }
+    }
+    return { ok: false, error: errors.slice(0, 6).join(' · ') || 'no stream' };
+  }
+
+  ipcMain.handle('yt-resolve-audio', async (_e, videoId) => {
+    try {
+      return await ytResolveAudioMain(videoId);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
   /**
    * YouTube / Innertube fetch for renderer (youtubei.js).
    * Renderer window.fetch dies with CORS / "Failed to fetch".
@@ -3716,27 +3875,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('yt-fetch', async (_e, payload) => {
     const url = String(payload?.url || '');
     if (!/^https:\/\//i.test(url)) {
-      throw new Error('yt-fetch: only https');
+      throw new Error('yt-fetch: only https — got: ' + url.slice(0, 60));
     }
     let host = '';
     try {
       host = new URL(url).hostname.toLowerCase();
     } catch {
-      throw new Error('yt-fetch: bad url');
+      throw new Error('yt-fetch: bad url: ' + url.slice(0, 80));
     }
-    const allowed =
-      /(^|\.)youtube\.com$/.test(host) ||
-      /(^|\.)youtu\.be$/.test(host) ||
-      /(^|\.)googlevideo\.com$/.test(host) ||
-      /(^|\.)ytimg\.com$/.test(host) ||
-      /(^|\.)ggpht\.com$/.test(host) ||
-      /(^|\.)googleusercontent\.com$/.test(host) ||
-      /(^|\.)googleapis\.com$/.test(host) ||
-      /(^|\.)gstatic\.com$/.test(host) ||
-      /(^|\.)youtube-nocookie\.com$/.test(host) ||
-      /(^|\.)yt\.be$/.test(host) ||
-      /(^|\.)google\.com$/.test(host);
-    if (!allowed) {
+    if (!isYtAllowedHost(host)) {
       throw new Error('yt-fetch: host not allowed: ' + host);
     }
 

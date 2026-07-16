@@ -77,7 +77,9 @@ function isYouTubeUrl(url: string): boolean {
       /(^|\.)googleusercontent\.com$/.test(h) ||
       /(^|\.)googleapis\.com$/.test(h) ||
       /(^|\.)gstatic\.com$/.test(h) ||
-      /(^|\.)youtube-nocookie\.com$/.test(h)
+      /(^|\.)youtube-nocookie\.com$/.test(h) ||
+      /(^|\.)youtubei\.googleapis\.com$/.test(h) ||
+      /(^|\.)google\.com$/.test(h)
     );
   } catch {
     return false;
@@ -197,16 +199,32 @@ function installYtEval(Platform: {
   const shim = Platform?.shim;
   if (!shim) return;
   shim.fetch = safeFetch;
-  shim.eval = (data, _env) => {
+  shim.eval = (data, env) => {
     const code = String(data?.output || '');
     if (!code.trim()) throw new Error('YouTube: empty decipher script');
-    // data.output already ends with `return process(...)` → { n, sig }
-    // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
-    const result = new Function(code)();
-    if (result == null || typeof result !== 'object') {
-      throw new Error('YouTube: decipher script returned invalid result');
+    // data.output already includes process(...) return; env has n/sig/sp when needed
+    try {
+      // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
+      const result = new Function('env', `${code}`)(env || {});
+      if (result == null || typeof result !== 'object') {
+        // fallback without env binding
+        // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
+        const r2 = new Function(code)();
+        if (r2 == null || typeof r2 !== 'object') {
+          throw new Error('YouTube: decipher script returned invalid result');
+        }
+        return r2 as Record<string, unknown>;
+      }
+      return result as Record<string, unknown>;
+    } catch (e) {
+      // Last resort: raw eval of body
+      // eslint-disable-next-line no-new-func, @typescript-eslint/no-implied-eval
+      const r2 = new Function(code)();
+      if (r2 == null || typeof r2 !== 'object') {
+        throw e instanceof Error ? e : new Error(String(e));
+      }
+      return r2 as Record<string, unknown>;
     }
-    return result as Record<string, unknown>;
   };
 }
 
@@ -447,20 +465,45 @@ async function decipherFormat(
     return f.url;
   }
 
+  // Manual signatureCipher parse: s=...&sp=sig&url=https%3A%2F%2F...
+  const cipherRaw = f.signature_cipher || f.cipher;
+  if (typeof cipherRaw === 'string' && cipherRaw.includes('url=')) {
+    try {
+      const params = new URLSearchParams(cipherRaw);
+      const base = params.get('url');
+      if (base?.startsWith('http') && player?.decipher) {
+        const u = await player.decipher(undefined, cipherRaw, undefined);
+        if (u?.startsWith('http')) return u;
+      }
+      // Without player: only works if s is already applied (rare)
+      if (base?.startsWith('http') && !params.get('s')) return base;
+    } catch {
+      /* fall through */
+    }
+  }
+
   if (typeof f.decipher === 'function' && player) {
     try {
       const u = await f.decipher(player);
       if (u?.startsWith('http')) return u;
     } catch (e) {
-      // try lower-level below
       const msg = e instanceof Error ? e.message : String(e);
-      if (!/No valid URL/i.test(msg)) throw e;
+      if (!/No valid URL/i.test(msg)) {
+        console.warn('[yt] format.decipher', msg);
+      }
     }
   }
 
   if (player?.decipher) {
-    const u = await player.decipher(f.url, f.signature_cipher, f.cipher);
-    if (u?.startsWith('http')) return u;
+    try {
+      const u = await player.decipher(f.url, f.signature_cipher, f.cipher);
+      if (u?.startsWith('http')) return u;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/No valid URL/i.test(msg)) {
+        console.warn('[yt] player.decipher', msg);
+      }
+    }
   }
 
   if (typeof f.url === 'string' && f.url.startsWith('http')) return f.url;
@@ -561,6 +604,21 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
   const id = String(videoId || '').trim();
   if (!id) throw new Error('YouTube: empty video id');
 
+  // 1) Main-process ANDROID/IOS player — plain progressive URLs, no decipher
+  const mainResolve = typeof window !== 'undefined' ? window.electronAPI?.ytResolveAudio : undefined;
+  if (mainResolve) {
+    try {
+      const r = await mainResolve(id);
+      if (r?.ok && r.url?.startsWith('http')) {
+        console.log('[yt] stream ok main', r.client, r.protocol);
+        return r.url;
+      }
+      if (r?.error) console.warn('[yt] main resolve failed', r.error);
+    } catch (e) {
+      console.warn('[yt] main resolve error', e instanceof Error ? e.message : e);
+    }
+  }
+
   const yt = (await getTube()) as Tube & {
     getBasicInfo: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
     getInfo?: (id: string, opts?: { client?: string }) => Promise<YtInfoLike>;
@@ -568,14 +626,15 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
   };
   const player = yt.session?.player;
 
-  // Prefer mobile/TV clients — progressive URLs more often
+  // Valid InnerTubeClient names only (see youtubei Misc.d.ts)
   const clients = [
     'ANDROID',
     'IOS',
-    'ANDROID_MUSIC',
+    'YTMUSIC_ANDROID',
     'ANDROID_VR',
     'TV',
     'TV_EMBEDDED',
+    'TV_SIMPLY',
     'MWEB',
     'WEB_EMBEDDED',
     'WEB',
@@ -594,14 +653,14 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
         (info.streaming_data?.adaptive_formats?.length || 0);
       errors.push(`${client || 'default'}:0/${n}`);
     } catch (e) {
-      errors.push(`${client || 'default'}:${e instanceof Error ? e.message : e}`);
-      console.warn('[yt] getBasicInfo', client, e instanceof Error ? e.message : e);
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`${client || 'default'}:${msg.slice(0, 60)}`);
+      console.warn('[yt] getBasicInfo', client, msg);
     }
   }
 
-  // Full getInfo (sometimes has richer streaming_data)
   if (typeof yt.getInfo === 'function') {
-    for (const client of ['ANDROID', 'IOS', undefined] as const) {
+    for (const client of ['ANDROID', 'IOS', 'TV', undefined] as const) {
       try {
         const info = (await yt.getInfo(id, client ? { client } : undefined)) as YtInfoLike;
         const url = await streamFromInfo(info, player, `getInfo:${client || 'def'}`);
@@ -612,7 +671,6 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     }
   }
 
-  // Library helper — decipher Format objects, not only .url
   if (typeof yt.getStreamingData === 'function') {
     for (const client of ['ANDROID', 'IOS', 'TV', undefined] as const) {
       for (const opts of [
@@ -637,7 +695,6 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     }
   }
 
-  // Reset innertube session once — stale player scripts break decipher
   innertubePromise = null;
   try {
     const yt2 = (await getTube()) as typeof yt;
@@ -649,8 +706,18 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     errors.push(`retry:${e instanceof Error ? e.message : e}`);
   }
 
+  // Main again after session reset
+  if (mainResolve) {
+    try {
+      const r = await mainResolve(id);
+      if (r?.ok && r.url?.startsWith('http')) return r.url;
+    } catch {
+      /* ignore */
+    }
+  }
+
   throw new Error(
-    `YouTube: no playable audio URL (${errors.slice(0, 5).join(' · ') || 'no clients'}). ` +
-      'Проверь прокси / попробуй другой ролик.'
+    `YouTube: no playable audio URL (${errors.slice(0, 4).join(' · ') || 'no clients'}). ` +
+      'Проверь прокси / другой ролик / перезапуск miura.'
   );
 }

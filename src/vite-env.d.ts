@@ -274,6 +274,15 @@ interface Window {
       _via?: string;
       _attempts?: string[];
     }>;
+    /** Main-process Innertube ANDROID/IOS player — plain progressive URLs */
+    ytResolveAudio: (videoId: string) => Promise<{
+      ok: boolean;
+      url?: string;
+      mime?: string;
+      protocol?: 'progressive' | 'hls';
+      client?: string;
+      error?: string;
+    }>;
     scEmbedPlay: (payload: {
       url: string;
       volume?: number;
