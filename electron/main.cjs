@@ -3728,141 +3728,283 @@ app.whenReady().then(async () => {
   }
 
   /**
-   * Direct Innertube player resolve in main — ANDROID often returns plain progressive URLs
-   * without signature decipher (fixes "No valid URL to decipher" in renderer youtubei).
+   * Resolve a playable audio URL in main process.
+   * Tries ANDROID/IOS player (plain URLs), both proxy+direct sessions, then watch-page scrape.
    */
   async function ytResolveAudioMain(videoId) {
     const id = String(videoId || '').trim();
     if (!/^[a-zA-Z0-9_-]{6,}$/.test(id)) {
       return { ok: false, error: 'bad video id' };
     }
-    const clients = [
-      {
-        name: 'ANDROID',
-        version: '21.03.36',
-        ua: 'com.google.android.youtube/21.03.36 (Linux; U; Android 14; en_US) gzip',
-        clientId: '3',
-      },
-      {
-        name: 'IOS',
-        version: '20.11.6',
-        ua: 'com.google.ios.youtube/20.11.6 (iPhone16,2; U; CPU iOS 17_5 like Mac OS X)',
-        clientId: '5',
-      },
-      {
-        name: 'ANDROID_MUSIC',
-        version: '7.27.52',
-        ua: 'com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14) gzip',
-        clientId: '21',
-      },
-      {
-        name: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-        version: '2.0',
-        ua: CHROME_UA,
-        clientId: '85',
-      },
-    ];
 
-    const doFetch =
-      typeof session.defaultSession.fetch === 'function'
-        ? session.defaultSession.fetch.bind(session.defaultSession)
-        : net.fetch.bind(net);
-
-    const pickUrl = (data) => {
+    const pickUrl = (data, label) => {
       const sd = data?.streamingData || data?.streaming_data;
       if (!sd) return null;
-      const formats = [...(sd.adaptiveFormats || sd.adaptive_formats || []), ...(sd.formats || [])];
-      // Prefer audio-only mp4/m4a with plain url (no signatureCipher)
-      const scored = formats
-        .map((f) => {
-          const mime = String(f.mimeType || f.mime_type || '');
-          const url = f.url ? String(f.url) : '';
-          const hasAudio = /audio|mp4a|opus|vorbis/i.test(mime) || f.audioQuality || f.audioSampleRate;
-          const hasVideo = /video\//i.test(mime) && !/audio/i.test(mime);
-          let score = Number(f.bitrate || f.averageBitrate || 0);
-          if (url.startsWith('http') && hasAudio && !hasVideo) score += 1e12;
-          else if (url.startsWith('http') && hasAudio) score += 1e11;
-          else if (url.startsWith('http')) score += 1e9;
-          else score = -1;
-          if (/mp4|mp4a|m4a/i.test(mime)) score += 1e6;
-          return { url, score, mime };
-        })
-        .filter((x) => x.score > 0 && x.url.startsWith('http'))
-        .sort((a, b) => b.score - a.score);
-      if (scored[0]?.url) return { url: scored[0].url, mime: scored[0].mime, protocol: 'progressive' };
-      // HLS
+      const formats = [
+        ...(sd.adaptiveFormats || sd.adaptive_formats || []),
+        ...(sd.formats || []),
+      ];
+      const scored = [];
+      for (const f of formats) {
+        const mime = String(f.mimeType || f.mime_type || '');
+        let url = f.url ? String(f.url) : '';
+        // signatureCipher: s=…&sp=sig&url=https%3A%2F%2F…  — url alone is useless without sig
+        // but some clients put a ready URL in .url
+        if (!url && (f.signatureCipher || f.signature_cipher || f.cipher)) {
+          try {
+            const raw = String(f.signatureCipher || f.signature_cipher || f.cipher);
+            const p = new URLSearchParams(raw);
+            // Only use if no `s` param (already signed) — rare
+            if (!p.get('s') && p.get('url')) url = decodeURIComponent(p.get('url'));
+          } catch {
+            /* ignore */
+          }
+        }
+        if (!url.startsWith('http')) continue;
+        const hasAudio =
+          /audio|mp4a|opus|vorbis|webm/i.test(mime) ||
+          f.audioQuality ||
+          f.audioSampleRate ||
+          f.audio_quality;
+        const hasVideo = /^video\//i.test(mime) || (f.width && f.height);
+        let score = Number(f.bitrate || f.averageBitrate || f.average_bitrate || 0);
+        if (hasAudio && !hasVideo) score += 1e12;
+        else if (hasAudio) score += 1e11;
+        else score += 1e9;
+        if (/mp4|mp4a|m4a/i.test(mime)) score += 1e6;
+        scored.push({ url, score, mime });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      if (scored[0]?.url) {
+        return {
+          url: scored[0].url,
+          mime: scored[0].mime,
+          protocol: 'progressive',
+          via: label,
+        };
+      }
       const hls = sd.hlsManifestUrl || sd.hls_manifest_url;
       if (hls && String(hls).startsWith('http')) {
-        return { url: String(hls), mime: 'application/x-mpegURL', protocol: 'hls' };
+        return {
+          url: String(hls),
+          mime: 'application/x-mpegURL',
+          protocol: 'hls',
+          via: label,
+        };
       }
       return null;
     };
 
+    const sessions = [
+      { label: 'proxy', ses: session.defaultSession },
+      { label: 'direct', ses: getDirectMediaSession() },
+    ];
+
+    // yt-dlp-style clients that often return plaintext googlevideo URLs
+    const clients = [
+      {
+        key: 'ANDROID',
+        clientName: 'ANDROID',
+        clientVersion: '19.44.38',
+        clientId: '3',
+        ua: 'com.google.android.youtube/19.44.38 (Linux; U; Android 11) gzip',
+        extra: { androidSdkVersion: 30, osName: 'Android', osVersion: '11' },
+      },
+      {
+        key: 'ANDROID_TESTSUITE',
+        clientName: 'ANDROID_TESTSUITE',
+        clientVersion: '1.9',
+        clientId: '30',
+        ua: 'com.google.android.youtube/1.9 (Linux; U; Android 12) gzip',
+        extra: { androidSdkVersion: 31, osName: 'Android', osVersion: '12' },
+      },
+      {
+        key: 'IOS',
+        clientName: 'IOS',
+        clientVersion: '19.45.4',
+        clientId: '5',
+        ua: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
+        extra: { deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '17.5.1.21F90' },
+      },
+      {
+        key: 'ANDROID_MUSIC',
+        clientName: 'ANDROID_MUSIC',
+        clientVersion: '7.27.52',
+        clientId: '21',
+        ua: 'com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 11) gzip',
+        extra: { androidSdkVersion: 30, osName: 'Android', osVersion: '11' },
+      },
+      {
+        key: 'TVHTML5_SIMPLY',
+        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+        clientVersion: '2.0',
+        clientId: '85',
+        ua: CHROME_UA,
+        extra: {},
+      },
+    ];
+
+    const endpoints = [
+      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+      'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false',
+      'https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false',
+    ];
+
     const errors = [];
-    for (const c of clients) {
+
+    async function fetchJson(ses, url, init) {
+      const doFetch =
+        typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
+      const res = await doFetch(url, init);
+      const text = await res.text();
+      let data = null;
       try {
-        const body = {
-          context: {
-            client: {
-              clientName: c.name,
-              clientVersion: c.version,
-              hl: 'en',
-              gl: 'US',
-              androidSdkVersion: 34,
-              osName: c.name.includes('IOS') ? 'iOS' : 'Android',
-              osVersion: '14',
-            },
-          },
-          videoId: id,
-          contentCheckOk: true,
-          racyCheckOk: true,
-        };
-        const url = `https://www.youtube.com/youtubei/v1/player?prettyPrint=false`;
-        const res = await doFetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': c.ua,
-            'X-YouTube-Client-Name': c.clientId,
-            'X-YouTube-Client-Version': c.version,
-            Origin: 'https://www.youtube.com',
-            Referer: 'https://www.youtube.com/',
-          },
-          body: JSON.stringify(body),
-        });
-        const text = await res.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          errors.push(`${c.name}:bad-json`);
-          continue;
+        data = JSON.parse(text);
+      } catch {
+        /* ignore */
+      }
+      return { status: res.status, data, len: text.length };
+    }
+
+    for (const { label, ses } of sessions) {
+      for (const c of clients) {
+        for (const endpoint of endpoints) {
+          try {
+            const body = {
+              context: {
+                client: {
+                  clientName: c.clientName,
+                  clientVersion: c.clientVersion,
+                  hl: 'en',
+                  gl: 'US',
+                  timeZone: 'UTC',
+                  utcOffsetMinutes: 0,
+                  ...c.extra,
+                },
+              },
+              videoId: id,
+              contentCheckOk: true,
+              racyCheckOk: true,
+              playbackContext: {
+                contentPlaybackContext: {
+                  html5Preference: 'HTML5_PREF_WANTS',
+                },
+              },
+            };
+            const { status, data, len } = await fetchJson(ses, endpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': c.ua,
+                'X-YouTube-Client-Name': c.clientId,
+                'X-YouTube-Client-Version': c.clientVersion,
+                Origin: 'https://www.youtube.com',
+                Referer: `https://www.youtube.com/watch?v=${id}`,
+              },
+              body: JSON.stringify(body),
+            });
+            if (!data) {
+              errors.push(`${label}/${c.key}:http${status}-badjson`);
+              continue;
+            }
+            const pstat =
+              data.playabilityStatus?.status || data.playability_status?.status || '?';
+            const picked = pickUrl(data, `${label}/${c.key}`);
+            if (picked) {
+              console.log(
+                '[yt-resolve] ok',
+                picked.via,
+                picked.protocol,
+                (picked.mime || '').slice(0, 36),
+                'len',
+                len
+              );
+              return { ok: true, ...picked, client: `${label}/${c.key}` };
+            }
+            const n =
+              (data.streamingData?.adaptiveFormats || []).length +
+              (data.streamingData?.formats || []).length;
+            errors.push(`${label}/${c.key}:${pstat}/fmt${n}/L${len}`);
+            console.log('[yt-resolve] miss', label, c.key, pstat, 'fmt', n, 'body', len);
+          } catch (e) {
+            errors.push(`${label}/${c.key}:${e?.message || e}`);
+          }
         }
-        const status = data?.playabilityStatus?.status || data?.playability_status?.status;
-        if (status && status !== 'OK') {
-          errors.push(`${c.name}:${status}`);
-          continue;
-        }
-        const picked = pickUrl(data);
-        if (picked) {
-          console.log('[yt-resolve] ok', c.name, picked.protocol, (picked.mime || '').slice(0, 40));
-          return { ok: true, ...picked, client: c.name };
-        }
-        const n =
-          (data?.streamingData?.adaptiveFormats || []).length +
-          (data?.streamingData?.formats || []).length;
-        errors.push(`${c.name}:no-url(${n})`);
-      } catch (e) {
-        errors.push(`${c.name}:${e?.message || e}`);
       }
     }
-    return { ok: false, error: errors.slice(0, 6).join(' · ') || 'no stream' };
+
+    // Fallback: scrape ytInitialPlayerResponse from watch / embed HTML
+    for (const { label, ses } of sessions) {
+      for (const pageUrl of [
+        `https://www.youtube.com/watch?v=${id}&bpctr=9999999999&has_verified=1`,
+        `https://www.youtube.com/embed/${id}`,
+      ]) {
+        try {
+          const doFetch =
+            typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
+          const res = await doFetch(pageUrl, {
+            method: 'GET',
+            headers: {
+              'User-Agent': CHROME_UA,
+              'Accept-Language': 'en-US,en;q=0.9',
+              Referer: 'https://www.youtube.com/',
+            },
+          });
+          const html = await res.text();
+          let data = null;
+          const patterns = [
+            /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s,
+            /var\s+ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s,
+          ];
+          for (const re of patterns) {
+            const m = html.match(re);
+            if (!m) continue;
+            try {
+              data = JSON.parse(m[1]);
+              break;
+            } catch {
+              /* try next */
+            }
+          }
+          // Sometimes embedded as JSON string in ytcfg
+          if (!data) {
+            const m2 = html.match(/"player_response":"(\{.+?\})"/);
+            if (m2) {
+              try {
+                data = JSON.parse(m2[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          if (!data) {
+            errors.push(`${label}/html:no-player-json`);
+            continue;
+          }
+          const picked = pickUrl(data, `${label}/html`);
+          if (picked) {
+            console.log('[yt-resolve] ok scrape', picked.via, picked.protocol);
+            return { ok: true, ...picked, client: `${label}/html` };
+          }
+          const n =
+            (data.streamingData?.adaptiveFormats || []).length +
+            (data.streamingData?.formats || []).length;
+          errors.push(`${label}/html:fmt${n}`);
+        } catch (e) {
+          errors.push(`${label}/html:${e?.message || e}`);
+        }
+      }
+    }
+
+    console.warn('[yt-resolve] failed', id, errors.slice(0, 8).join(' | '));
+    return { ok: false, error: errors.slice(0, 8).join(' · ') || 'no stream' };
   }
 
   ipcMain.handle('yt-resolve-audio', async (_e, videoId) => {
     try {
       return await ytResolveAudioMain(videoId);
     } catch (e) {
+      console.error('[yt-resolve]', e);
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   });

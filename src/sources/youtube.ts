@@ -604,8 +604,9 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
   const id = String(videoId || '').trim();
   if (!id) throw new Error('YouTube: empty video id');
 
-  // 1) Main-process ANDROID/IOS player — plain progressive URLs, no decipher
+  // 1) Main-process player (ANDROID/IOS/html scrape) — preferred, no cipher
   const mainResolve = typeof window !== 'undefined' ? window.electronAPI?.ytResolveAudio : undefined;
+  let mainErr = '';
   if (mainResolve) {
     try {
       const r = await mainResolve(id);
@@ -613,10 +614,14 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
         console.log('[yt] stream ok main', r.client, r.protocol);
         return r.url;
       }
-      if (r?.error) console.warn('[yt] main resolve failed', r.error);
+      mainErr = r?.error || 'main:no-url';
+      console.warn('[yt] main resolve failed', mainErr);
     } catch (e) {
-      console.warn('[yt] main resolve error', e instanceof Error ? e.message : e);
+      mainErr = e instanceof Error ? e.message : String(e);
+      console.warn('[yt] main resolve error', mainErr);
     }
+  } else {
+    mainErr = 'no-ytResolveAudio-ipc';
   }
 
   const yt = (await getTube()) as Tube & {
@@ -716,8 +721,9 @@ export async function resolveYouTubeStreamUrl(videoId: string): Promise<string> 
     }
   }
 
+  const detail = [mainErr, ...errors].filter(Boolean).slice(0, 5).join(' · ');
   throw new Error(
-    `YouTube: no playable audio URL (${errors.slice(0, 4).join(' · ') || 'no clients'}). ` +
-      'Проверь прокси / другой ролик / перезапуск miura.'
+    `YouTube: no playable audio URL (${detail || 'unknown'}). ` +
+      'Проверь прокси (Настройки → Сеть → Сохранить и проверить) и перезапусти miura.'
   );
 }
