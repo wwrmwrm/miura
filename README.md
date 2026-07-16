@@ -1,5 +1,9 @@
 <div align="center">
 
+![miura — multi-source desktop music player](docs/github-banner.svg)
+
+<br/>
+
 # miura
 
 ### One player. Every source you already use.

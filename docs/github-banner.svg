@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="miura — multi-source desktop music player">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0c0a09"/>
+      <stop offset="45%" stop-color="#161210"/>
+      <stop offset="100%" stop-color="#1a1410"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#f97316" stop-opacity="0.22"/>
+      <stop offset="50%" stop-color="#fb923c" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#241e1a" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#1a1613" stop-opacity="0.9"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="40" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="24" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <ellipse cx="980" cy="120" rx="420" ry="280" fill="url(#glow)" filter="url(#soft)"/>
+  <ellipse cx="200" cy="520" rx="360" ry="220" fill="#f97316" fill-opacity="0.06" filter="url(#soft)"/>
+
+  <!-- Subtle grid -->
+  <g stroke="#fff5eb" stroke-opacity="0.03" stroke-width="1">
+    <path d="M0 160 H1280 M0 320 H1280 M0 480 H1280"/>
+    <path d="M320 0 V640 M640 0 V640 M960 0 V640"/>
+  </g>
+
+  <!-- Left content -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
+    <!-- Wordmark -->
+    <text x="88" y="210" fill="#f7f2ec" font-size="92" font-weight="700" letter-spacing="-2.5">miura</text>
+    <!-- Accent underline -->
+    <rect x="88" y="228" width="120" height="4" rx="2" fill="url(#accent)"/>
+
+    <text x="88" y="290" fill="#f7f2ec" font-size="32" font-weight="600" letter-spacing="-0.3">
+      One player. Every source you already use.
+    </text>
+    <text x="88" y="340" fill="#c9c0b6" font-size="20" font-weight="400">
+      Local library · SoundCloud · YouTube — one queue, one bar.
+    </text>
+
+    <!-- Source chips -->
+    <g transform="translate(88, 390)">
+      <!-- Local -->
+      <rect width="150" height="44" rx="22" fill="#241e1a" stroke="#fff5eb" stroke-opacity="0.1"/>
+      <circle cx="28" cy="22" r="6" fill="#a3e635"/>
+      <text x="48" y="27" fill="#f7f2ec" font-size="15" font-weight="600">Local</text>
+
+      <!-- SoundCloud -->
+      <g transform="translate(166,0)">
+        <rect width="180" height="44" rx="22" fill="#241e1a" stroke="#ff5500" stroke-opacity="0.45"/>
+        <circle cx="28" cy="22" r="6" fill="#ff5500"/>
+        <text x="48" y="27" fill="#f7f2ec" font-size="15" font-weight="600">SoundCloud</text>
+      </g>
+
+      <!-- YouTube -->
+      <g transform="translate(362,0)">
+        <rect width="150" height="44" rx="22" fill="#241e1a" stroke="#ff0033" stroke-opacity="0.4"/>
+        <circle cx="28" cy="22" r="6" fill="#ff0033"/>
+        <text x="48" y="27" fill="#f7f2ec" font-size="15" font-weight="600">YouTube</text>
+      </g>
+    </g>
+
+    <text x="88" y="500" fill="#8f8680" font-size="15" font-weight="500">
+      Electron · React · TypeScript · MIT
+    </text>
+  </g>
+
+  <!-- Right: faux player card -->
+  <g filter="url(#shadow)" transform="translate(760, 120)">
+    <rect width="420" height="400" rx="28" fill="url(#card)" stroke="#fff5eb" stroke-opacity="0.08"/>
+    <!-- Album art block -->
+    <rect x="36" y="36" width="140" height="140" rx="18" fill="#2a221c"/>
+    <rect x="36" y="36" width="140" height="140" rx="18" fill="url(#accent)" fill-opacity="0.25"/>
+    <!-- Equalizer bars on art -->
+    <g transform="translate(86, 96)" fill="#fb923c">
+      <rect x="0" y="18" width="8" height="28" rx="3"/>
+      <rect x="14" y="8" width="8" height="38" rx="3"/>
+      <rect x="28" y="14" width="8" height="32" rx="3"/>
+      <rect x="42" y="4" width="8" height="42" rx="3"/>
+      <rect x="56" y="12" width="8" height="34" rx="3"/>
+    </g>
+    <!-- Track meta -->
+    <text x="200" y="78" fill="#f7f2ec" font-size="20" font-weight="700" font-family="ui-sans-serif, system-ui, sans-serif">Now playing</text>
+    <text x="200" y="112" fill="#c9c0b6" font-size="15" font-family="ui-sans-serif, system-ui, sans-serif">mixed sources · one queue</text>
+    <g transform="translate(200, 138)">
+      <rect width="72" height="22" rx="11" fill="#ff5500" fill-opacity="0.2" stroke="#ff5500" stroke-opacity="0.5"/>
+      <text x="36" y="15" text-anchor="middle" fill="#ffb899" font-size="11" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif">SC</text>
+      <g transform="translate(80,0)">
+        <rect width="72" height="22" rx="11" fill="#ff0033" fill-opacity="0.15" stroke="#ff0033" stroke-opacity="0.45"/>
+        <text x="36" y="15" text-anchor="middle" fill="#ff99aa" font-size="11" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif">YT</text>
+      </g>
+    </g>
+
+    <!-- Progress -->
+    <text x="36" y="220" fill="#8f8680" font-size="12" font-family="ui-sans-serif, system-ui, sans-serif">1:24</text>
+    <rect x="72" y="212" width="276" height="6" rx="3" fill="#fff5eb" fill-opacity="0.08"/>
+    <rect x="72" y="212" width="120" height="6" rx="3" fill="url(#accent)"/>
+    <circle cx="192" cy="215" r="7" fill="#fb923c"/>
+    <text x="360" y="220" fill="#8f8680" font-size="12" font-family="ui-sans-serif, system-ui, sans-serif">3:48</text>
+
+    <!-- Controls -->
+    <g transform="translate(120, 268)" fill="none" stroke="#f7f2ec" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <!-- shuffle on -->
+      <g transform="translate(0,8)" stroke="#fb923c">
+        <path d="M2 2h8v4M2 14l10-10M14 10v6h-4"/>
+        <path d="M10 10l6 6M2 2l4 4"/>
+      </g>
+      <!-- prev -->
+      <g transform="translate(56,4)" stroke="#c9c0b6">
+        <path d="M14 4L6 12l8 8"/>
+        <path d="M6 4v16"/>
+      </g>
+      <!-- play -->
+      <g transform="translate(112,0)">
+        <circle cx="16" cy="16" r="22" fill="#fb923c" stroke="none"/>
+        <path d="M12 9v14l12-7-12-7z" fill="#1a1410" stroke="none"/>
+      </g>
+      <!-- next -->
+      <g transform="translate(176,4)" stroke="#c9c0b6">
+        <path d="M6 4l8 8-8 8"/>
+        <path d="M18 4v16"/>
+      </g>
+      <!-- repeat -->
+      <g transform="translate(232,6)" stroke="#c9c0b6">
+        <path d="M18 2l4 4-4 4"/>
+        <path d="M4 10V8a4 4 0 014-4h14"/>
+        <path d="M6 22l-4-4 4-4"/>
+        <path d="M20 14v2a4 4 0 01-4 4H2"/>
+      </g>
+    </g>
+
+    <!-- Queue strip -->
+    <g transform="translate(36, 340)">
+      <rect width="348" height="36" rx="10" fill="#fff5eb" fill-opacity="0.04"/>
+      <text x="14" y="23" fill="#8f8680" font-size="12" font-family="ui-sans-serif, system-ui, sans-serif">Queue</text>
+      <text x="70" y="23" fill="#c9c0b6" font-size="12" font-family="ui-sans-serif, system-ui, sans-serif">12 tracks · shuffle bag · no repeats</text>
+    </g>
+  </g>
+
+  <!-- Bottom edge accent line -->
+  <rect x="0" y="636" width="1280" height="4" fill="url(#accent)"/>
+</svg>
