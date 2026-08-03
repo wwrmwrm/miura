@@ -24,7 +24,10 @@ let client = null;
 let ready = false;
 let connecting = false;
 let lastActivityKey = '';
+let lastError = '';
 let reconnectTimer = null;
+/** Last successful payload — re-applied after reconnect */
+let lastPayload = null;
 
 function configPath() {
   return path.join(app.getPath('userData'), 'discord.json');
@@ -46,7 +49,6 @@ function readConfig() {
     const data = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
     return {
       enabled: data.enabled !== false,
-      // Always prefer built-in app id; ignore stale placeholders from old installs
       clientId: resolveClientId(data.clientId),
     };
   } catch {
@@ -71,8 +73,17 @@ function truncate(str, max) {
 }
 
 /**
- * Discord only accepts https cover URLs (≤ ~256 chars) as large_image.
- * data:, blob:, miura-file: → empty (shows app icon otherwise).
+ * Public HTTPS logo for Discord assets (must be on the internet — Discord fetches it).
+ * Prefer compact square icon; length must stay ≤ ~256 chars.
+ */
+const APP_ICON_URL =
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-icon.png';
+const APP_ICON_URL_SM =
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-icon-128.png';
+
+/**
+ * Discord accepts https image URLs (≤ ~256 chars) as large_image / small_image.
+ * data:, blob:, miura-file: → empty.
  */
 function normalizeDiscordArt(url) {
   let u = String(url || '').trim();
@@ -81,21 +92,49 @@ function normalizeDiscordArt(url) {
   if (u.startsWith('http://')) u = 'https://' + u.slice(7);
   if (!/^https:\/\//i.test(u)) return '';
 
-  // Prefer a stable SoundCloud size that almost always exists
-  // (t500x500 can 404 on older artworks → Discord falls back to app icon)
-  u = u
-    .replace(/-t67x67(\.\w+)?(\?|$)/i, '-large$1$2')
-    .replace(/-t200x200(\.\w+)?(\?|$)/i, '-large$1$2')
-    .replace(/-badge(\.\w+)?(\?|$)/i, '-large$1$2')
-    .replace(/-crop(\.\w+)?(\?|$)/i, '-large$1$2')
-    .replace(/-tiny(\.\w+)?(\?|$)/i, '-large$1$2');
+  // Strip query (can blow past length limit / confuse Discord proxy)
+  try {
+    const parsed = new URL(u);
+    u = parsed.origin + parsed.pathname;
+  } catch {
+    u = u.split('?')[0];
+  }
 
-  // Discord RPC limit on external image URLs (~256)
+  u = u
+    .replace(/-t67x67(\.\w+)?$/i, '-large$1')
+    .replace(/-t200x200(\.\w+)?$/i, '-large$1')
+    .replace(/-badge(\.\w+)?$/i, '-large$1')
+    .replace(/-crop(\.\w+)?$/i, '-large$1')
+    .replace(/-tiny(\.\w+)?$/i, '-large$1')
+    .replace(/-small(\.\w+)?$/i, '-large$1');
+
   if (u.length > 256) {
     u = u.replace(/-t500x500/i, '-large').replace(/-t300x300/i, '-large');
   }
   if (u.length > 256) return '';
   return u;
+}
+
+/** Build assets block: big cover + small miura badge (or logo alone). */
+function buildAssets(art, title, artist, playing) {
+  const tip = truncate(
+    playing ? `${title} — ${artist}` : `Paused · ${title} — ${artist}`,
+    128
+  );
+  if (art) {
+    return {
+      large_image: art,
+      large_text: tip,
+      // Corner badge — app mark over album art
+      small_image: APP_ICON_URL_SM.length <= 256 ? APP_ICON_URL_SM : APP_ICON_URL,
+      small_text: 'miura',
+    };
+  }
+  // No track art → full card is the app icon
+  return {
+    large_image: APP_ICON_URL.length <= 256 ? APP_ICON_URL : APP_ICON_URL_SM,
+    large_text: 'miura',
+  };
 }
 
 function destroyClient() {
@@ -131,8 +170,15 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     const cfg = readConfig();
-    if (cfg.enabled) void connect(cfg.clientId);
-  }, 15000);
+    if (cfg.enabled) {
+      void connect(cfg.clientId).then((r) => {
+        if (r.ok && lastPayload) {
+          lastActivityKey = '';
+          void setPresence(lastPayload);
+        }
+      });
+    }
+  }, 8000);
 }
 
 /**
@@ -140,11 +186,13 @@ function scheduleReconnect() {
  */
 async function connect(clientId) {
   if (!DiscordRPC) {
-    return { ok: false, error: 'discord-rpc not installed' };
+    lastError = 'discord-rpc not installed';
+    return { ok: false, error: lastError };
   }
   const id = resolveClientId(clientId);
   if (!id) {
-    return { ok: false, error: 'Нет Discord Application ID' };
+    lastError = 'Нет Discord Application ID';
+    return { ok: false, error: lastError };
   }
   if (connecting) return { ok: false, error: 'connecting' };
   if (client && ready) return { ok: true, ready: true };
@@ -156,7 +204,7 @@ async function connect(clientId) {
     try {
       DiscordRPC.register(id);
     } catch {
-      /* register is optional on some platforms */
+      /* optional */
     }
 
     const rpc = new DiscordRPC.Client({ transport: 'ipc' });
@@ -165,7 +213,13 @@ async function connect(clientId) {
     rpc.on('ready', () => {
       ready = true;
       connecting = false;
+      lastError = '';
       console.log('[discord] rich presence ready as', rpc.user?.username || 'ok');
+      // Re-push after Discord restarts mid-session
+      if (lastPayload) {
+        lastActivityKey = '';
+        void setPresence(lastPayload);
+      }
     });
 
     rpc.on('disconnected', () => {
@@ -179,16 +233,111 @@ async function connect(clientId) {
     await rpc.login({ clientId: id });
     ready = true;
     connecting = false;
+    lastError = '';
     return { ok: true, ready: true };
   } catch (e) {
     connecting = false;
     ready = false;
     client = null;
     const msg = e instanceof Error ? e.message : String(e);
+    lastError = msg;
     console.warn('[discord] login failed:', msg);
     scheduleReconnect();
     return { ok: false, error: msg };
   }
+}
+
+/**
+ * Apply activity with progressive fallbacks.
+ * Discord often rejects: type, external art URLs, or buttons — not the whole presence.
+ */
+async function applyActivity(base) {
+  const withAppOnly = (() => {
+    const a = { ...base };
+    delete a.buttons;
+    a.assets = {
+      large_image: APP_ICON_URL,
+      large_text: 'miura',
+    };
+    return a;
+  })();
+
+  const variants = [
+    { ...base },
+    // no buttons (common reject)
+    (() => {
+      const a = { ...base };
+      delete a.buttons;
+      return a;
+    })(),
+    // cover only, drop small badge (some clients choke on dual external images)
+    (() => {
+      const a = { ...base };
+      delete a.buttons;
+      if (a.assets && a.assets.large_image) {
+        a.assets = {
+          large_image: a.assets.large_image,
+          large_text: a.assets.large_text,
+        };
+      }
+      return a;
+    })(),
+    // app icon as large image only
+    withAppOnly,
+    // no type (defaults to Playing)
+    (() => {
+      const a = { ...withAppOnly };
+      delete a.type;
+      return a;
+    })(),
+    // absolute minimal
+    {
+      details: base.details,
+      state: base.state,
+      instance: false,
+    },
+  ];
+
+  let lastMsg = '';
+  for (let i = 0; i < variants.length; i++) {
+    const activity = variants[i];
+    try {
+      if (client && typeof client.request === 'function') {
+        await client.request('SET_ACTIVITY', {
+          pid: process.pid,
+          activity,
+        });
+      } else if (client) {
+        await client.setActivity({
+          details: activity.details,
+          state: activity.state,
+          startTimestamp: activity.timestamps?.start,
+          endTimestamp: activity.timestamps?.end,
+          largeImageKey: activity.assets?.large_image,
+          largeImageText: activity.assets?.large_text,
+          smallImageKey: activity.assets?.small_image,
+          smallImageText: activity.assets?.small_text,
+          buttons: activity.buttons,
+          instance: false,
+        });
+      }
+      if (i > 0) {
+        console.log('[discord] setActivity ok with fallback #' + i);
+      }
+      lastError = '';
+      return {
+        ok: true,
+        fallback: i,
+        art: Boolean(activity.assets?.large_image),
+        badge: Boolean(activity.assets?.small_image),
+      };
+    } catch (e) {
+      lastMsg = e instanceof Error ? e.message : String(e);
+      console.warn('[discord] setActivity try', i, lastMsg);
+    }
+  }
+  lastError = lastMsg || 'setActivity failed';
+  return { ok: false, error: lastError };
 }
 
 /**
@@ -213,6 +362,7 @@ async function setPresence(payload) {
       }
     }
     lastActivityKey = '';
+    lastPayload = null;
     return { ok: true, cleared: true, reason: 'disabled' };
   }
 
@@ -223,6 +373,7 @@ async function setPresence(payload) {
 
   if (!payload || !payload.title) {
     lastActivityKey = '';
+    lastPayload = null;
     try {
       if (client && ready) await client.clearActivity();
     } catch {
@@ -231,46 +382,46 @@ async function setPresence(payload) {
     return { ok: true, cleared: true };
   }
 
+  lastPayload = { ...payload };
+
   const title = truncate(payload.title, 128);
   const artistRaw = truncate(payload.artist || 'miura', 128);
   const artist = artistRaw.startsWith('by ') ? artistRaw.slice(3).trim() : artistRaw;
-  const duration = Number(payload.duration) || 0; // seconds
+  const duration = Number(payload.duration) || 0;
   const progress = Math.max(0, Number(payload.progress) || 0);
   const playing = payload.playing !== false;
   const art = normalizeDiscordArt(payload.artworkUrl);
 
-  // Stable key — include cover so we refresh when art arrives later
+  // Coarse key — progress bucket 15s so we don't spam IPC
   const key = [
     title,
     artist,
     playing ? '1' : '0',
-    // While paused, ignore progress buckets so we don't thrash; while playing, 5s seeks
-    playing ? Math.floor(progress / 5) : Math.floor(progress),
+    playing ? Math.floor(progress / 15) : Math.floor(progress),
     Math.floor(duration),
-    art || 'no-art',
+    art ? 'art' : 'no-art',
   ].join('|');
 
   if (key === lastActivityKey) {
     return { ok: true, skipped: true };
   }
-  lastActivityKey = key;
 
   /** @type {Record<string, unknown>} */
   const activity = {
+    // Line 1 (bold-ish in profile): track title
     details: title,
-    // Pause: Discord has no real “frozen” timer — only `start` keeps ticking as elapsed.
-    // So we drop timestamps when paused and mark state clearly.
+    // Line 2: artist + source tag
     state: playing
-      ? truncate(`by ${artist}`, 128)
+      ? truncate(`${artist} · miura`, 128)
       : truncate(`Paused · ${artist}`, 128),
-    // type 2 = LISTENING → "Listening to miura" (not "Playing")
+    // type 2 = LISTENING → "Listening to miura"
     type: 2,
     instance: false,
+    // Always show images: cover + miura badge, or logo alone
+    assets: buildAssets(art, title, artist, playing),
   };
 
-  // Progress bar only while actively playing (start+end → Discord fills by wall clock).
-  // Do NOT set only `start` on pause — Discord will keep counting elapsed time.
-  if (duration > 0 && playing) {
+  if (duration > 1 && playing) {
     const start = Date.now() - Math.floor(progress * 1000);
     activity.timestamps = {
       start,
@@ -278,75 +429,29 @@ async function setPresence(payload) {
     };
   }
 
-  // Track cover as large image (external HTTPS URL). Without this Discord shows app icon.
-  if (art) {
-    activity.assets = {
-      large_image: art,
-      large_text: truncate(
-        playing ? `${title} — ${artist}` : `⏸ ${title} — ${artist}`,
-        128
-      ),
-    };
-  }
-
-  // Optional track link only (no GitHub button for now)
+  // Buttons often rejected for unverified apps — still try, fallback strips them
   const link = String(payload.permalink || '').trim();
-  if (link.startsWith('http')) {
-    const label =
-      /youtube|youtu\.be/i.test(link)
-        ? 'Open on YouTube'
-        : /soundcloud/i.test(link)
-          ? 'Open on SoundCloud'
-          : 'Open track';
+  if (/^https:\/\//i.test(link)) {
+    const label = /soundcloud/i.test(link)
+      ? 'SoundCloud'
+      : /youtube|youtu\.be/i.test(link)
+        ? 'YouTube'
+        : 'Open track';
     activity.buttons = [{ label: truncate(label, 32), url: link.slice(0, 512) }];
   }
 
-  try {
-    // discord-rpc's setActivity() drops `type` — call SET_ACTIVITY directly
-    if (typeof client.request === 'function') {
-      await client.request('SET_ACTIVITY', {
-        pid: process.pid,
-        activity,
-      });
-    } else {
-      await client.setActivity({
-        details: activity.details,
-        state: activity.state,
-        startTimestamp: activity.timestamps?.start,
-        endTimestamp: activity.timestamps?.end,
-        largeImageKey: activity.assets?.large_image,
-        largeImageText: activity.assets?.large_text,
-        buttons: activity.buttons,
-        instance: false,
-      });
-    }
-    if (!art) {
-      console.log('[discord] no https cover for', title, '— app icon will show');
-    }
-    return { ok: true, art: Boolean(art) };
-  } catch (e) {
+  const result = await applyActivity(activity);
+  if (result.ok) {
+    lastActivityKey = key;
+  } else {
     lastActivityKey = '';
-    const msg = e instanceof Error ? e.message : String(e);
-    console.warn('[discord] setActivity:', msg);
-    // Retry once without assets if image URL rejected
-    if (art && activity.assets) {
-      try {
-        delete activity.assets;
-        if (typeof client.request === 'function') {
-          await client.request('SET_ACTIVITY', { pid: process.pid, activity });
-        }
-        console.warn('[discord] retried without cover image');
-        return { ok: true, art: false };
-      } catch {
-        /* ignore */
-      }
-    }
-    return { ok: false, error: msg };
   }
+  return result;
 }
 
 async function clearPresence() {
   lastActivityKey = '';
+  lastPayload = null;
   if (client && ready) {
     try {
       await client.clearActivity();
@@ -365,8 +470,9 @@ async function getStatus() {
     ready,
     connected: Boolean(client && ready),
     hasPackage: Boolean(DiscordRPC),
-    /** Always false — Application ID is built into the app */
     needsClientId: false,
+    lastError: lastError || null,
+    hasLastTrack: Boolean(lastPayload?.title),
   };
 }
 
@@ -384,6 +490,10 @@ async function setConfig(partial) {
 
   if (next.enabled) {
     const r = await connect(next.clientId);
+    if (r.ok && lastPayload) {
+      lastActivityKey = '';
+      await setPresence(lastPayload);
+    }
     return { config: next, connect: r };
   }
 
@@ -396,6 +506,8 @@ async function initOnStartup() {
     console.log('[discord] disabled');
     return;
   }
+  // Delay slightly so Discord IPC is up if both start together
+  await new Promise((r) => setTimeout(r, 1500));
   await connect(cfg.clientId);
 }
 
