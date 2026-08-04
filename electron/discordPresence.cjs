@@ -125,15 +125,14 @@ function buildAssets(art, title, artist, playing) {
     return {
       large_image: art,
       large_text: tip,
-      // Corner badge — app mark over album art
+      // Corner badge — enlarged light MIURA mark (no hover caption)
       small_image: APP_ICON_URL_SM.length <= 256 ? APP_ICON_URL_SM : APP_ICON_URL,
-      small_text: 'miura',
     };
   }
   // No track art → full card is the app icon
   return {
     large_image: APP_ICON_URL.length <= 256 ? APP_ICON_URL : APP_ICON_URL_SM,
-    large_text: 'miura',
+    large_text: tip || 'miura',
   };
 }
 
