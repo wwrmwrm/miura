@@ -76,10 +76,13 @@ function truncate(str, max) {
  * Public HTTPS logo for Discord assets (must be on the internet — Discord fetches it).
  * Prefer compact square icon; length must stay ≤ ~256 chars.
  */
+// Unique path on each design change — Discord CDN caches forever by URL
 const APP_ICON_URL =
-  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-icon.png';
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-badge-v2.png';
 const APP_ICON_URL_SM =
-  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-icon-128.png';
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-badge-v2-128.png';
+/** Bump when badge art changes so presence always re-sends assets */
+const APP_ICON_REV = 'v2';
 
 /**
  * Discord accepts https image URLs (≤ ~256 chars) as large_image / small_image.
@@ -399,6 +402,7 @@ async function setPresence(payload) {
     playing ? Math.floor(progress / 15) : Math.floor(progress),
     Math.floor(duration),
     art ? 'art' : 'no-art',
+    APP_ICON_REV, // force refresh when badge file/URL changes
   ].join('|');
 
   if (key === lastActivityKey) {
