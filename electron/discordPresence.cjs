@@ -77,12 +77,13 @@ function truncate(str, max) {
  * Prefer compact square icon; length must stay ≤ ~256 chars.
  */
 // Unique path on each design change — Discord CDN caches forever by URL
+// Same mark as the desktop app icon (音 / sakura ink)
 const APP_ICON_URL =
-  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-badge-v2.png';
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-app-icon-v3-256.png';
 const APP_ICON_URL_SM =
-  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-badge-v2-128.png';
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-app-icon-v3-128.png';
 /** Bump when badge art changes so presence always re-sends assets */
-const APP_ICON_REV = 'v2';
+const APP_ICON_REV = 'app-v3';
 
 /**
  * Discord accepts https image URLs (≤ ~256 chars) as large_image / small_image.
@@ -128,7 +129,7 @@ function buildAssets(art, title, artist, playing) {
     return {
       large_image: art,
       large_text: tip,
-      // Corner badge — enlarged light MIURA mark (no hover caption)
+      // Corner badge — same as desktop app icon
       small_image: APP_ICON_URL_SM.length <= 256 ? APP_ICON_URL_SM : APP_ICON_URL,
     };
   }
@@ -437,9 +438,7 @@ async function setPresence(payload) {
   if (/^https:\/\//i.test(link)) {
     const label = /soundcloud/i.test(link)
       ? 'SoundCloud'
-      : /youtube|youtu\.be/i.test(link)
-        ? 'YouTube'
-        : 'Open track';
+      : 'Open track';
     activity.buttons = [{ label: truncate(label, 32), url: link.slice(0, 512) }];
   }
 
