@@ -1,6 +1,6 @@
 <div align="center">
 
-![miura](docs/banner-detail.png)
+![miura](docs/banner-detail.png?v=sakura-ink)
 
 # miura
 
