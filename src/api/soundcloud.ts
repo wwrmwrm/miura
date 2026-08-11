@@ -236,9 +236,9 @@ export function setThemeAccent(_color?: string) {
   document.documentElement.style.setProperty('--accent-hover-ink', contrastOnAccent(hover));
   document.documentElement.style.setProperty('--accent-soft', hexToRgba(color, 0.14));
   document.documentElement.style.setProperty('--accent-dim', hexToRgba(color, 0.18));
-  // Keep soft tint only — no bloom / glow mesh
-  document.documentElement.style.setProperty('--accent-glow', 'transparent');
-  document.documentElement.style.setProperty('--accent-mist', 'transparent');
+  // Soft tint for “now playing” rows / focus rings (must not be fully transparent)
+  document.documentElement.style.setProperty('--accent-mist', hexToRgba(color, 0.1));
+  document.documentElement.style.setProperty('--accent-glow', hexToRgba(color, 0.22));
   document.documentElement.style.setProperty('--accent-2', shiftHue(color, 48));
   document.documentElement.style.setProperty('--accent-2-soft', hexToRgba(shiftHue(color, 48), 0.12));
   document.documentElement.style.setProperty('--accent-3', shiftHue(color, -36));

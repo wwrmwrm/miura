@@ -130,6 +130,34 @@ import type {
 } from './types';
 import miuraMarkUrl from './assets/miura-mark.png';
 
+/** Match a fav/recent row to the currently playing Track (SC id or playable uid). */
+function isFavoriteNowPlaying(
+  f: { id?: string; track?: Track | null; playable?: Playable | null; source?: string },
+  current: Track | null | undefined
+): boolean {
+  if (!current) return false;
+  if (f.track && f.track.id === current.id) return true;
+  const curPlayable = getPlayable(current.id);
+  if (f.playable && curPlayable && f.playable.uid === curPlayable.uid) return true;
+  if (f.playable && f.playable.uid && current.genre === f.playable.source) {
+    // hashed playable track id
+    if (curPlayable?.uid === f.playable.uid) return true;
+  }
+  const fid = String(f.id || '');
+  if (fid === `soundcloud:${current.id}` || fid === `sc:${current.id}`) return true;
+  if (curPlayable) {
+    if (fid === `${curPlayable.source}:${curPlayable.uid}`) return true;
+    if (fid === curPlayable.uid) return true;
+    if (fid === `local:${curPlayable.filePath || ''}` && curPlayable.source === 'local') return true;
+  }
+  // Local tracks use hashUid; match via permalink/uid blob
+  if (curPlayable?.source === 'local' && fid.startsWith('local:')) {
+    const path = String(curPlayable.filePath || curPlayable.uid.replace(/^local:/, ''));
+    if (fid === `local:${path}` || fid.endsWith(path.replace(/\\/g, '/'))) return true;
+  }
+  return false;
+}
+
 /** SoundCloud-style home filter tabs */
 type HomeTab = 'all' | HomeGroup;
 
@@ -518,6 +546,11 @@ export default function App() {
 
   const playFavoriteItem = useCallback(
     (f: FavItem) => {
+      // Same item already current → toggle pause/play
+      if (isFavoriteNowPlaying(f, player.current)) {
+        player.toggle();
+        return;
+      }
       if (f.playable) {
         player.playPlayable(f.playable);
         return;
@@ -1929,18 +1962,41 @@ export default function App() {
                 <p className="note">{t.profile.favsEmpty}</p>
               ) : (
                 <div className="cat track-list-compact">
-                  {favorites.map((f, i) => (
-                    <div key={f.id} className="cat-row track-row-compact">
+                  {favorites.map((f, i) => {
+                    const isCurrent = isFavoriteNowPlaying(f, player.current);
+                    const isPlaying = isCurrent && player.state === 'playing';
+                    const isLoading = isCurrent && player.state === 'loading';
+                    return (
+                    <div
+                      key={f.id}
+                      className={`cat-row track-row-compact${isCurrent ? ' live' : ''}${isPlaying ? ' playing' : ''}`}
+                    >
                       <button
                         type="button"
-                        className="idx"
-                        title={t.common.play}
+                        className={`idx ${isCurrent ? 'on' : ''}`}
+                        title={isPlaying ? t.common.pause : t.common.play}
                         onClick={() => playFavoriteItem(f)}
                       >
-                        <span className="idx-num">{i + 1}</span>
-                        <span className="idx-play hover-only" aria-hidden>
-                          ▶
-                        </span>
+                        {isLoading ? (
+                          <span className="idx-load" />
+                        ) : isPlaying ? (
+                          <span className="eq" aria-hidden>
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        ) : isCurrent ? (
+                          <span className="idx-play" aria-hidden>
+                            ▶
+                          </span>
+                        ) : (
+                          <>
+                            <span className="idx-num">{i + 1}</span>
+                            <span className="idx-play hover-only" aria-hidden>
+                              ▶
+                            </span>
+                          </>
+                        )}
                       </button>
                       <button
                         type="button"
@@ -1995,7 +2051,8 @@ export default function App() {
                         ★
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -2006,28 +2063,54 @@ export default function App() {
                 <EmptyState />
               ) : (
                 <div className="cat track-list-compact">
-                  {recent.slice(0, 24).map((r, i) => (
-                    <div key={r.id} className="cat-row track-row-compact">
+                  {recent.slice(0, 24).map((r, i) => {
+                    const isCurrent = isFavoriteNowPlaying(r, player.current);
+                    const isPlaying = isCurrent && player.state === 'playing';
+                    const isLoading = isCurrent && player.state === 'loading';
+                    const playRecent = () => {
+                      if (isCurrent) {
+                        player.toggle();
+                        return;
+                      }
+                      if (r.playable) player.playPlayable(r.playable);
+                      else if (r.track) player.playTrack(r.track);
+                    };
+                    return (
+                    <div
+                      key={r.id}
+                      className={`cat-row track-row-compact${isCurrent ? ' live' : ''}${isPlaying ? ' playing' : ''}`}
+                    >
                       <button
                         type="button"
-                        className="idx"
-                        onClick={() => {
-                          if (r.playable) player.playPlayable(r.playable);
-                          else if (r.track) player.playTrack(r.track);
-                        }}
+                        className={`idx ${isCurrent ? 'on' : ''}`}
+                        title={isPlaying ? t.common.pause : t.common.play}
+                        onClick={playRecent}
                       >
-                        <span className="idx-num">{i + 1}</span>
-                        <span className="idx-play hover-only" aria-hidden>
-                          ▶
-                        </span>
+                        {isLoading ? (
+                          <span className="idx-load" />
+                        ) : isPlaying ? (
+                          <span className="eq" aria-hidden>
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        ) : isCurrent ? (
+                          <span className="idx-play" aria-hidden>
+                            ▶
+                          </span>
+                        ) : (
+                          <>
+                            <span className="idx-num">{i + 1}</span>
+                            <span className="idx-play hover-only" aria-hidden>
+                              ▶
+                            </span>
+                          </>
+                        )}
                       </button>
                       <button
                         type="button"
                         className="cat-art-wrap"
-                        onClick={() => {
-                          if (r.playable) player.playPlayable(r.playable);
-                          else if (r.track) player.playTrack(r.track);
-                        }}
+                        onClick={playRecent}
                       >
                         {r.artworkUrl ? (
                           <img
@@ -2048,10 +2131,7 @@ export default function App() {
                       <button
                         type="button"
                         className="cat-main"
-                        onClick={() => {
-                          if (r.playable) player.playPlayable(r.playable);
-                          else if (r.track) player.playTrack(r.track);
-                        }}
+                        onClick={playRecent}
                       >
                         <span className="cat-title">
                           <span className="cat-title-text">{r.title}</span>
@@ -2060,7 +2140,8 @@ export default function App() {
                         <span className="cat-sub">{r.artist}</span>
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>
