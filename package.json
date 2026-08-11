@@ -2,7 +2,7 @@
   "name": "miura",
   "version": "1.0.1",
   "private": true,
-  "description": "miura — multi-source music player (local, SoundCloud, YouTube)",
+  "description": "miura — multi-source music player (local, SoundCloud)",
   "author": "miura",
   "main": "electron/main.cjs",
   "type": "module",
@@ -51,11 +51,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}"
@@ -94,5 +98,9 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "wait-on": "^8.0.1"
+  },
+  "allowScripts": {
+    "electron@34.5.8": true,
+    "esbuild@0.25.12": true
   }
 }

@@ -4,7 +4,7 @@
 
 # miura
 
-**Local · SoundCloud · YouTube** — one queue, one player bar.
+**Local · SoundCloud** — one queue, one player bar.
 
 [![Electron](https://img.shields.io/badge/Electron-34-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
@@ -27,7 +27,6 @@ cd miura && npm install && npm run dev
 |--|--|
 | **Local** | Folders, watch, ID3 covers, artists/albums/genres, smart lists, M3U |
 | **SoundCloud** | Login, search, likes, playlists, progressive + HLS (open streams only) |
-| **YouTube** | Search + play in the same queue |
 | **Player** | Shuffle bag (no repeats until full cycle), repeat, queue, mini player |
 | **Library** | Favorites, recents, miura playlists, text/M3U import |
 | **Desktop** | Discord presence, media keys, themes, accent color |
@@ -77,7 +76,7 @@ Publish the installer/portable as a [GitHub Release](https://github.com/wwrmwrm/
 
 ## Stack
 
-Electron · React · TypeScript · Vite · hls.js · youtubei.js · music-metadata · discord-rpc
+Electron · React · TypeScript · Vite · hls.js · music-metadata · discord-rpc
 
 ```
 src/          UI, player, SC API, i18n
@@ -91,7 +90,6 @@ docs/         banners, Widevine notes
 
 - **Windows-first** — see [Platforms](#platforms)
 - **SoundCloud DRM / Go+** — not supported by default ([details](docs/WIDEVINE.md))
-- **YouTube** — network-sensitive; SOCKS «all traffic» may help
 - Respect platform ToS and artists’ rights
 - Local tag edits stay in-app; files on disk are not rewritten by default
 
