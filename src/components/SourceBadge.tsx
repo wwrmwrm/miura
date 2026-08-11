@@ -6,7 +6,6 @@ import type { Track } from '../types';
 const LABEL: Record<string, string> = {
   local: 'Local',
   soundcloud: 'SC',
-  youtube: 'YT',
 };
 
 export function SourceBadge({

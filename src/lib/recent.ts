@@ -34,10 +34,7 @@ export function pushRecent(item: Omit<RecentItem, 'at' | 'id'> & { id?: string }
 }
 
 export function trackToRecent(track: Track): Omit<RecentItem, 'at' | 'id'> {
-  const source =
-    track.genre === 'local' || track.genre === 'youtube'
-      ? String(track.genre)
-      : 'soundcloud';
+  const source = track.genre === 'local' ? 'local' : 'soundcloud';
   return {
     title: track.title,
     artist: track.user?.username || track.user?.full_name || '—',

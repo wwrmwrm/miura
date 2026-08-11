@@ -5,14 +5,11 @@ import type { StreamInfo } from '../api/soundcloud';
 import type { PlaybackState, Track } from '../types';
 import type { Playable } from '../player/types';
 import {
-  extractYoutubeVideoId,
   getPlayable,
   getPlayableResolver,
   playableToTrack,
   registerPlayableResolver,
 } from '../player/playableBridge';
-import { resolveYouTubeStreamUrl } from '../sources/youtube';
-import { youtubeUid } from '../player/types';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
@@ -176,8 +173,6 @@ export function usePlayer() {
   
   const localBlobUrlRef = useRef<string | null>(null);
   
-  const ytPageActiveRef = useRef(false);
-  const ytPagePollRef = useRef<number | null>(null);
 
   const revokeLocalBlob = () => {
     if (localBlobUrlRef.current) {
@@ -190,18 +185,6 @@ export function usePlayer() {
     }
   };
 
-  const stopYtPage = useCallback(async () => {
-    if (ytPagePollRef.current != null) {
-      window.clearInterval(ytPagePollRef.current);
-      ytPagePollRef.current = null;
-    }
-    ytPageActiveRef.current = false;
-    try {
-      await window.electronAPI?.ytPageCommand?.({ cmd: 'stop' });
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   const initial = useRef(loadPersistedPlayer()).current;
   const initialProgress =
@@ -416,21 +399,12 @@ export function usePlayer() {
         const onErr = () => {
           cleanup();
           const code = audio.error?.code;
-          const src = String(audio.currentSrc || audio.src || '');
-          const isYt =
-            /googlevideo\.com|youtube\.com|piped|invidious|miura-yt:/i.test(src);
           const msg =
             code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-              ? isYt
-                ? 'YouTube: поток не открылся. Нажми play ещё раз или выбери другой трек.'
-                : 'Формат не поддерживается (лучше MP3, M4A, FLAC, WAV, OGG). WMA — нет.'
+              ? 'Формат не поддерживается (лучше MP3, M4A, FLAC, WAV, OGG). WMA — нет.'
               : code === MediaError.MEDIA_ERR_NETWORK
-                ? isYt
-                  ? 'YouTube: сеть/прокси. Проверь SOCKS «весь трафик» и попробуй снова.'
-                  : 'Не удалось прочитать файл (путь / права / miura-file).'
-                : isYt
-                  ? 'YouTube: ошибка загрузки. Попробуй ещё раз.'
-                  : 'Ошибка загрузки аудио';
+                ? 'Не удалось прочитать файл (путь / права / miura-file).'
+                : 'Ошибка загрузки аудио';
           reject(new Error(msg));
         };
         audio.addEventListener('canplay', onOk, { once: true });
@@ -456,9 +430,7 @@ export function usePlayer() {
       const startAt = opts?.startAt;
       const playableHint = getPlayable(track.id);
       const stickySource =
-        playableHint?.source === 'youtube' ||
         playableHint?.source === 'local' ||
-        track.genre === 'youtube' ||
         track.genre === 'local';
       const skipOnFail =
         opts?.skipOnFail !== undefined ? opts.skipOnFail !== false : !stickySource;
@@ -473,8 +445,7 @@ export function usePlayer() {
       markShufflePlayed(track.id);
 
       destroyHls();
-      await stopYtPage();
-      try {
+            try {
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
@@ -483,153 +454,6 @@ export function usePlayer() {
       }
 
       try {
-        const playableEarly = getPlayable(track.id);
-        const isYouTube =
-          playableEarly?.source === 'youtube' ||
-          track.genre === 'youtube' ||
-          Boolean(playableEarly?.uid?.startsWith('yt:'));
-
-        if (isYouTube) {
-          let videoId = extractYoutubeVideoId(track, playableEarly);
-          if (!videoId) {
-            const raw = String(track.permalink_url || '');
-            if (raw.startsWith('yt:')) videoId = raw.slice(3).trim();
-          }
-          if (!videoId || !/^[a-zA-Z0-9_-]{6,}$/.test(videoId)) {
-            throw new Error('YouTube: нет video id. Открой трек из поиска YouTube.');
-          }
-
-          if (!playableEarly || !getPlayable(track.id)) {
-            registerPlayableResolver(
-              track.id,
-              {
-                uid: youtubeUid(videoId),
-                source: 'youtube',
-                title: track.title,
-                artist: track.user?.username || '',
-                durationMs: track.duration || 0,
-                artworkUrl: track.artwork_url,
-                meta: { videoId },
-              },
-              async () => {
-                const url = await resolveYouTubeStreamUrl(videoId);
-                const isHls = url.includes('.m3u8') && !url.startsWith('miura-yt:');
-                return { url, protocol: isHls ? 'hls' : 'progressive' };
-              }
-            );
-          }
-
-          const seekTo =
-            typeof startAt === 'number' && startAt > 1
-              ? startAt
-              : pendingSeekRef.current > 1
-                ? pendingSeekRef.current
-                : 0;
-          pendingSeekRef.current = 0;
-
-          try {
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
-          } catch {
-            /* ignore */
-          }
-
-          if (!window.electronAPI?.ytPagePlay) {
-            throw new Error(
-              'YouTube: перезапусти miura полностью (закрой окно и npm run dev) — нет ytPagePlay'
-            );
-          }
-          const pr = await Promise.race([
-            window.electronAPI.ytPagePlay({
-              videoId,
-              volume: mutedRef.current ? 0 : volumeRef.current,
-              muted: mutedRef.current,
-              startAt: seekTo,
-            }),
-            new Promise<{ ok: false; error: string }>((resolve) => {
-              window.setTimeout(
-                () =>
-                  resolve({
-                    ok: false,
-                    error:
-                      'YouTube: таймаут 30с. Проверь SOCKS «весь трафик» (настройки miura → прокси).',
-                  }),
-                30_000
-              );
-            }),
-          ]);
-          if (!pr?.ok) {
-            throw new Error(pr?.error || 'YouTube: не удалось запустить');
-          }
-
-          ytPageActiveRef.current = true;
-          setError(null);
-          setState(autoplay ? 'playing' : 'paused');
-          streamLoadedForIdRef.current = track.id;
-          const dur =
-            (pr.duration && pr.duration > 0 ? pr.duration : track.duration / 1000) || 0;
-          setDuration(dur);
-          const t0 = typeof pr.currentTime === 'number' ? pr.currentTime : seekTo || 0;
-          setProgress(t0);
-          progressRef.current = t0;
-
-          if (ytPagePollRef.current != null) window.clearInterval(ytPagePollRef.current);
-          ytPagePollRef.current = window.setInterval(() => {
-            void (async () => {
-              if (!ytPageActiveRef.current) return;
-              try {
-                const s = await window.electronAPI?.ytPageCommand?.({ cmd: 'status' });
-                if (!s?.ok) return;
-                if (s.isAd) return; // mute ads; ignore progress
-                if (s.duration && s.duration > 0) setDuration(s.duration);
-                const t = Number(s.currentTime) || 0;
-                setProgress(t);
-                progressRef.current = t;
-                if (s.ended) {
-                  if (ytPagePollRef.current != null) {
-                    window.clearInterval(ytPagePollRef.current);
-                    ytPagePollRef.current = null;
-                  }
-                  ytPageActiveRef.current = false;
-                  const q = queueRef.current;
-                  const cur = currentRef.current;
-                  if (!q.length || !cur) {
-                    setState('paused');
-                    return;
-                  }
-                  if (repeatRef.current === 'one') {
-                    void loadAndPlayRef.current(cur, { autoplay: true, startAt: 0 });
-                    return;
-                  }
-                  const idx = q.findIndex((x) => x.id === cur.id);
-                  const next = idx >= 0 ? q[idx + 1] : null;
-                  if (next) void loadAndPlayRef.current(next);
-                  else if (repeatRef.current !== 'off' && q[0]) void loadAndPlayRef.current(q[0]);
-                  else setState('paused');
-                } else if (s.paused === false) {
-                  setState('playing');
-                } else if (s.paused === true) {
-                  setState('paused');
-                }
-              } catch {
-                /* ignore */
-              }
-            })();
-          }, 400);
-
-          skipFailCountRef.current = 0;
-          if (autoplay) {
-            setState('playing');
-            void window.electronAPI.ytPageCommand?.({ cmd: 'play' });
-          } else {
-            void window.electronAPI.ytPageCommand?.({ cmd: 'pause' });
-            setState('paused');
-          }
-          schedulePersist();
-          return;
-        }
-
         let stream: StreamInfo;
         const external = getPlayableResolver(track.id);
         if (external) {
@@ -721,7 +545,7 @@ export function usePlayer() {
         setError(msg);
       }
     },
-    [attachStream, maybeExtendStation, schedulePersist, markShufflePlayed, stopYtPage]
+    [attachStream, maybeExtendStation, schedulePersist, markShufflePlayed]
   );
 
   loadAndPlayRef.current = loadAndPlay;
@@ -734,14 +558,52 @@ export function usePlayer() {
     audioRef.current = audio;
 
     let lastPersistAt = 0;
+    let lastReactProgressAt = 0;
+    let progressRaf = 0;
+    /** Smooth progress: keep ref every frame; throttle React setState so the app doesn't re-render 60fps. */
+    const pushProgress = (t: number, forceReact = false) => {
+      progressRef.current = t;
+      if (forceReact) {
+        setProgress(t);
+        lastReactProgressAt = performance.now();
+        return;
+      }
+      if (progressRaf) return;
+      progressRaf = requestAnimationFrame(() => {
+        progressRaf = 0;
+        const now = performance.now();
+        // ~5 UI updates/sec is enough for any non-bar consumers; PlayerBar reads getProgress()
+        if (now - lastReactProgressAt >= 200) {
+          lastReactProgressAt = now;
+          setProgress(progressRef.current);
+        }
+      });
+    };
     const onTime = () => {
-      setProgress(audio.currentTime);
-      progressRef.current = audio.currentTime;
+      pushProgress(audio.currentTime);
       const now = Date.now();
       if (now - lastPersistAt > 4000) {
         lastPersistAt = now;
         schedulePersist();
       }
+    };
+    // High-res progress while playing (timeupdate is sparse ~4Hz)
+    let tickRaf = 0;
+    const tickProgress = () => {
+      tickRaf = 0;
+      if (!audioRef.current || audio.paused || audio.ended) return;
+      pushProgress(audio.currentTime);
+      tickRaf = requestAnimationFrame(tickProgress);
+    };
+    const onPlayingSmooth = () => {
+      if (!tickRaf) tickRaf = requestAnimationFrame(tickProgress);
+    };
+    const onPauseSmooth = () => {
+      if (tickRaf) {
+        cancelAnimationFrame(tickRaf);
+        tickRaf = 0;
+      }
+      pushProgress(audio.currentTime, true);
     };
     const onMeta = () => setDuration(audio.duration || 0);
     const onPlay = () => setState('playing');
@@ -784,11 +646,6 @@ export function usePlayer() {
       persistNow();
     };
     const onErr = () => {
-      if (ytPageActiveRef.current) return;
-      const t = currentRef.current;
-      if (t && (t.genre === 'youtube' || getPlayable(t.id)?.source === 'youtube')) {
-        return;
-      }
       setState('error');
       setError('Ошибка воспроизведения');
     };
@@ -801,7 +658,10 @@ export function usePlayer() {
     audio.addEventListener('loadedmetadata', onMeta);
     audio.addEventListener('durationchange', onMeta);
     audio.addEventListener('play', onPlay);
+    audio.addEventListener('play', onPlayingSmooth);
+    audio.addEventListener('playing', onPlayingSmooth);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('pause', onPauseSmooth);
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('error', onErr);
 
@@ -833,13 +693,17 @@ export function usePlayer() {
       }
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('beforeunload', flush);
-      void stopYtPage();
-      audio.pause();
+            audio.pause();
       audio.removeAttribute('src');
       audio.load();
       destroyHls();
       revokeLocalBlob();
+      if (tickRaf) cancelAnimationFrame(tickRaf);
+      if (progressRaf) cancelAnimationFrame(progressRaf);
       audio.removeEventListener('timeupdate', onTime);
+      audio.removeEventListener('play', onPlayingSmooth);
+      audio.removeEventListener('playing', onPlayingSmooth);
+      audio.removeEventListener('pause', onPauseSmooth);
       audio.removeEventListener('loadedmetadata', onMeta);
       audio.removeEventListener('durationchange', onMeta);
       audio.removeEventListener('play', onPlay);
@@ -903,34 +767,6 @@ export function usePlayer() {
         throw new Error(
           'Локальные файлы: перезапусти miura (npm run dev) — нужен Electron IPC localReadAudio'
         );
-      }
-      if (p.source === 'youtube') {
-        const videoId = String(p.meta?.videoId || p.uid.replace(/^yt:/, ''));
-        const resolveOnce = () => resolveYouTubeStreamUrl(videoId);
-        const withTimeout = (p: Promise<string>, ms: number) =>
-          Promise.race([
-            p,
-            new Promise<string>((_, reject) => {
-              window.setTimeout(
-                () =>
-                  reject(
-                    new Error(
-                      'YouTube: таймаут. Нажми play ещё раз (SOCKS «весь трафик»).'
-                    )
-                  ),
-                ms
-              );
-            }),
-          ]);
-        let url: string;
-        try {
-          url = await withTimeout(resolveOnce(), 40_000);
-        } catch (e1) {
-          console.warn('[yt] resolve retry after', e1);
-          url = await withTimeout(resolveOnce(), 45_000);
-        }
-        const isHls = url.includes('.m3u8') && !url.startsWith('miura-yt:');
-        return { url, protocol: isHls ? ('hls' as const) : ('progressive' as const) };
       }
       if (p.streamUrl) {
         return {
@@ -1022,12 +858,6 @@ export function usePlayer() {
   }, [loadAndPlay, maybeExtendStation]);
 
   const playPrev = useCallback(() => {
-    if (ytPageActiveRef.current && progressRef.current > 3) {
-      void window.electronAPI?.ytPageCommand?.({ cmd: 'seek', value: 0 });
-      progressRef.current = 0;
-      setProgress(0);
-      return;
-    }
     const audio = audioRef.current;
     if (audio && audio.currentTime > 3) {
       audio.currentTime = 0;
@@ -1062,28 +892,6 @@ export function usePlayer() {
     const audio = audioRef.current;
     const track = currentRef.current;
     if (!track) return;
-
-    if (ytPageActiveRef.current && streamLoadedForIdRef.current === track.id) {
-      void (async () => {
-        try {
-          const s = await window.electronAPI?.ytPageCommand?.({ cmd: 'status' });
-          if (s && s.paused === false) {
-            await window.electronAPI?.ytPageCommand?.({ cmd: 'pause' });
-            setState('paused');
-          } else {
-            await window.electronAPI?.ytPageCommand?.({ cmd: 'play' });
-            setState('playing');
-          }
-          persistNow();
-        } catch {
-          void loadAndPlay(track, {
-            autoplay: true,
-            startAt: progressRef.current > 1 ? progressRef.current : 0,
-          });
-        }
-      })();
-      return;
-    }
 
     if (!audio) return;
 
@@ -1120,13 +928,6 @@ export function usePlayer() {
   }, [loadAndPlay, persistNow]);
 
   const seek = useCallback((time: number) => {
-    if (ytPageActiveRef.current) {
-      progressRef.current = time;
-      setProgress(time);
-      void window.electronAPI?.ytPageCommand?.({ cmd: 'seek', value: time });
-      schedulePersist();
-      return;
-    }
     const audio = audioRef.current;
     if (!audio) return;
     if (streamLoadedForIdRef.current !== currentRef.current?.id || !audio.currentSrc) {
@@ -1148,12 +949,6 @@ export function usePlayer() {
       const clamped = Math.min(1, Math.max(0, v));
       volumeRef.current = clamped;
       setVolumeState(clamped);
-      if (ytPageActiveRef.current) {
-        void window.electronAPI?.ytPageCommand?.({
-          cmd: 'volume',
-          value: mutedRef.current ? 0 : clamped,
-        });
-      }
       if (audio) {
         audio.volume = clamped;
         if (clamped > 0 && audio.muted) {
@@ -1173,12 +968,6 @@ export function usePlayer() {
     mutedRef.current = next;
     setIsMuted(next);
     if (audio) audio.muted = next;
-    if (ytPageActiveRef.current) {
-      void window.electronAPI?.ytPageCommand?.({
-        cmd: 'volume',
-        value: next ? 0 : volumeRef.current,
-      });
-    }
     schedulePersist();
   }, [schedulePersist]);
 
@@ -1295,12 +1084,15 @@ export function usePlayer() {
     });
   }, []);
 
+  const getProgress = useCallback(() => progressRef.current, []);
+
   return {
     queue,
     current,
     state,
     error,
     progress,
+    getProgress,
     duration,
     volume,
     isMuted,

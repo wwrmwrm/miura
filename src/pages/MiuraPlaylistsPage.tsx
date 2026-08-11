@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useT } from '../i18n';
 import {
   appendItems,
+  appendPlayables,
   createPlaylist,
   deletePlaylist,
   flushPlaylists,
@@ -17,6 +18,7 @@ import {
   type MiuraPlaylist,
   type MiuraPlaylistItem,
 } from '../lib/miuraPlaylists';
+import { pathToPlayable, type LocalTrackMeta } from '../sources/localLibrary';
 import {
   applyResolveToItem,
   parseTrackListText,
@@ -65,8 +67,7 @@ export function MiuraPlaylistsPage({
   const [descDraft, setDescDraft] = useState('');
   const [sources, setSources] = useState<Record<ImportSource, boolean>>({
     local: true,
-    soundcloud: false,
-    youtube: true,
+    soundcloud: true,
   });
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -131,15 +132,61 @@ export function MiuraPlaylistsPage({
   const sourceList = useMemo(() => {
     const s: ImportSource[] = [];
     if (sources.local) s.push('local');
-    if (sources.youtube) s.push('youtube');
     if (sources.soundcloud) s.push('soundcloud');
-    return s.length ? s : (['youtube'] as ImportSource[]);
+    return s.length ? s : (['local', 'soundcloud'] as ImportSource[]);
   }, [sources]);
 
   const openCreate = () => {
     setCreateTitle(t.playlists.defaultName);
     setCreateOpen(true);
     setMsg(null);
+  };
+
+  const addOwnTracks = async () => {
+    if (!active || importing) return;
+    if (!window.electronAPI?.localPickFiles) {
+      flashMsg(t.playlists.addOwnTracksEmpty);
+      return;
+    }
+    try {
+      const list = await window.electronAPI.localPickFiles();
+      if (list && !Array.isArray(list) && 'error' in list) {
+        flashMsg(String((list as { error?: string }).error || t.common.error));
+        return;
+      }
+      const files = Array.isArray(list) ? (list as LocalTrackMeta[]) : [];
+      if (!files.length) {
+        flashMsg(t.playlists.addOwnTracksEmpty);
+        return;
+      }
+      let metas = files;
+      if (window.electronAPI.localEnrichMeta) {
+        try {
+          const paths = files.map((f) => f.path).filter(Boolean);
+          const res = await window.electronAPI.localEnrichMeta(paths);
+          if (Array.isArray(res) && res.length) {
+            const byPath = new Map(
+              (res as LocalTrackMeta[]).map((m) => [String(m.path || '').replace(/\\/g, '/'), m])
+            );
+            metas = files.map((f) => {
+              const key = String(f.path || '').replace(/\\/g, '/');
+              return byPath.get(key) || f;
+            });
+          }
+        } catch {
+          /* keep basic meta */
+        }
+      }
+      const playables = metas.map((m) => pathToPlayable(m));
+      const before = active.items.length;
+      appendPlayables(active.id, playables);
+      refresh();
+      const after = loadPlaylists().find((p) => p.id === active.id);
+      const added = Math.max(0, (after?.items.length || before) - before);
+      flashMsg(t.playlists.addOwnTracksDone.replace('{n}', String(added || playables.length)));
+    } catch (e) {
+      flashMsg(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const submitCreate = () => {
@@ -423,11 +470,11 @@ export function MiuraPlaylistsPage({
   const playItem = (it: MiuraPlaylistItem, fromList: MiuraPlaylistItem[]) => {
     if (it.status !== 'found') return;
     const src = itemSource(it);
-    if ((src === 'youtube' || src === 'local') && it.playable) {
+    if (src === 'local' && it.playable) {
       const list = fromList
         .filter((x) => {
           const s = itemSource(x);
-          return (s === 'youtube' || s === 'local') && x.playable;
+          return s === 'local' && x.playable;
         })
         .map((x) => x.playable!) as Playable[];
       onPlayPlayable(it.playable, list);
@@ -620,12 +667,21 @@ export function MiuraPlaylistsPage({
         </button>
         <button
           type="button"
+          className="miura-pl-ico solid"
+          title={t.playlists.addOwnTracks}
+          disabled={importing}
+          onClick={() => void addOwnTracks()}
+        >
+          <IconPlus />
+        </button>
+        <button
+          type="button"
           className="miura-pl-ico"
           title={t.playlists.addFromText}
           disabled={importing}
           onClick={() => setImportOpen(true)}
         >
-          <IconPlus />
+          <IconFile />
         </button>
         <button
           type="button"
@@ -701,7 +757,7 @@ export function MiuraPlaylistsPage({
           </span>
         </button>
         <div className="miura-pl-hero-text">
-          <p className="miura-pl-hero-kicker">{t.nav.miuraPlaylists}</p>
+          <p className="miura-pl-hero-kicker">{t.nav.playlists}</p>
           {editingField === 'title' ? (
             <input
               ref={titleInputRef}
@@ -760,7 +816,18 @@ export function MiuraPlaylistsPage({
 
       <div className="miura-pl-tracks-wrap">
         {active.items.length === 0 ? (
-          <p className="note">{t.playlists.noTracksYet}</p>
+          <div className="miura-pl-empty" style={{ marginTop: 24 }}>
+            <p className="note">{t.playlists.noTracksYet}</p>
+            <button
+              type="button"
+              className="btn solid"
+              style={{ marginTop: 12 }}
+              disabled={importing}
+              onClick={() => void addOwnTracks()}
+            >
+              {t.playlists.addOwnTracks}
+            </button>
+          </div>
         ) : (
           <VirtualList
             className="miura-pl-tracks miura-pl-virtual miura-pl-vlist"
@@ -874,9 +941,7 @@ const PlaylistTrackRow = React.memo(function PlaylistTrackRow({
     (it.playable?.artworkUrl && /^https?:\/\//i.test(it.playable.artworkUrl)
       ? it.playable.artworkUrl
       : '') ||
-    (src === 'youtube' && it.playable
-      ? `https://i.ytimg.com/vi/${String(it.playable.meta?.videoId || it.playable.uid.replace(/^yt:/, ''))}/hqdefault.jpg`
-      : '');
+    '';
 
   return (
     <div
@@ -911,18 +976,7 @@ const PlaylistTrackRow = React.memo(function PlaylistTrackRow({
             decoding="async"
             referrerPolicy="no-referrer"
             onError={(e) => {
-              const img = e.currentTarget;
-              const s = img.getAttribute('src') || '';
-              const m = s.match(/i\.ytimg\.com\/vi\/([^/]+)\//i);
-              if (m && !s.includes('hqdefault')) {
-                img.src = `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`;
-                return;
-              }
-              if (m && !s.includes('mqdefault')) {
-                img.src = `https://i.ytimg.com/vi/${m[1]}/mqdefault.jpg`;
-                return;
-              }
-              img.style.display = 'none';
+              e.currentTarget.style.display = 'none';
             }}
           />
         ) : (
@@ -943,13 +997,11 @@ const PlaylistTrackRow = React.memo(function PlaylistTrackRow({
         <span className="cat-sub">
           {it.status === 'found'
             ? `${it.artist || '—'} · ${
-                src === 'youtube'
-                  ? 'YouTube'
-                  : src === 'local'
-                    ? 'Local'
-                    : src === 'soundcloud'
-                      ? 'SoundCloud'
-                      : ''
+                src === 'local'
+                  ? 'Local'
+                  : src === 'soundcloud'
+                    ? 'SoundCloud'
+                    : src || ''
               }${activeRow ? (isPlayingNow ? ' · ▶' : ' · ⏸') : ''}`
             : it.status === 'searching'
               ? searchingLabel
@@ -1132,7 +1184,7 @@ function ImportModal({
         </p>
 
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', margin: '10px 0 14px' }}>
-          {(['local', 'youtube', 'soundcloud'] as ImportSource[]).map((s) => (
+          {(['local', 'soundcloud'] as ImportSource[]).map((s) => (
             <label key={s} className="settings-check">
               <input
                 type="checkbox"
@@ -1140,13 +1192,7 @@ function ImportModal({
                 disabled={busy}
                 onChange={(e) => setSources((prev) => ({ ...prev, [s]: e.target.checked }))}
               />
-              <span>
-                {s === 'local'
-                  ? t.sources.local
-                  : s === 'soundcloud'
-                    ? t.sources.soundcloud
-                    : t.sources.youtube}
-              </span>
+              <span>{s === 'local' ? t.sources.local : t.sources.soundcloud}</span>
             </label>
           ))}
         </div>

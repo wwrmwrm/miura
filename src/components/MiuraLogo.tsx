@@ -60,10 +60,6 @@ export function SourcePills({ className }: { className?: string }) {
         <i />
         SoundCloud
       </span>
-      <span className="src-pill src-pill-yt">
-        <i />
-        YouTube
-      </span>
     </div>
   );
 }

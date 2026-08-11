@@ -1,8 +1,8 @@
 /** Unified playable item across all miura sources. */
-export type MusicSource = 'local' | 'soundcloud' | 'youtube';
+export type MusicSource = 'local' | 'soundcloud';
 
 export type Playable = {
-  /** Stable id within source, e.g. `local:C:/Music/a.mp3` or `yt:dQw4w9WgXcQ` */
+  /** Stable id within source, e.g. `local:C:/Music/a.mp3` or `sc:123` */
   uid: string;
   source: MusicSource;
   title: string;
@@ -20,11 +20,6 @@ export type Playable = {
 export function localUid(filePath: string): string {
   return `local:${filePath.replace(/\\/g, '/')}`;
 }
-
-export function youtubeUid(videoId: string): string {
-  return `yt:${videoId}`;
-}
-
 
 export function soundcloudUid(trackId: number | string): string {
   return `sc:${trackId}`;

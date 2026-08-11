@@ -40,18 +40,6 @@ const localFileSchemePrivs = {
 protocol.registerSchemesAsPrivileged([
   { scheme: 'miura-file', privileges: { ...localFileSchemePrivs } },
   { scheme: 'miu-file', privileges: { ...localFileSchemePrivs } },
-  // Proxied YouTube/googlevideo audio for <audio> (headers + session proxy)
-  {
-    scheme: 'miura-yt',
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      stream: true,
-      bypassCSP: true,
-      corsEnabled: true,
-    },
-  },
 ]);
 
 const isDev = !app.isPackaged;
@@ -64,7 +52,6 @@ let authServerPort = 0;
 let pendingBrowserLogin = null; // { resolve, reject, timer }
 /** Hidden SoundCloud embed player (DRM tracks) */
 let scEmbedWin = null;
-/** Hidden YouTube watch window — audio only (googlevideo re-fetch always 403s) */
 
 
 // Realistic Chrome UA (match installed Chromium major roughly)
@@ -248,7 +235,6 @@ async function applyProxyConfig(cfg) {
   const targets = [
     session.defaultSession,
     session.fromPartition('persist:sc-login'),
-    session.fromPartition('persist:miura-yt-audio'),
   ];
   let last = { ok: true, applied: 'direct' };
   for (const ses of targets) {
@@ -267,21 +253,12 @@ function installCaptureHooksOnSession(ses) {
       '*://secure.soundcloud.com/*',
       '*://api-auth.soundcloud.com/*',
       '*://*.soundcloud.cloud/*',
-      // YouTube media in <audio> needs YT referer or googlevideo 403s
-      '*://*.googlevideo.com/*',
-      '*://*.youtube.com/*',
-      '*://*.ytimg.com/*',
     ],
   };
 
   ses.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const u = String(details.url || '');
-    const isYtMedia =
-      /googlevideo\.com/i.test(u) ||
-      (/youtube\.com/i.test(u) && /videoplayback|\/api\/timedtext/i.test(u));
-
     // During login: only OBSERVE headers — don't rewrite Origin/Referer (triggers bot walls)
-    if (capture.loginActive && !isYtMedia) {
+    if (capture.loginActive) {
       const auth = details.requestHeaders?.Authorization || details.requestHeaders?.authorization;
       if (auth) {
         const m = String(auth).match(/OAuth\s+([A-Za-z0-9._~\-+/=]+)/i);
@@ -293,13 +270,7 @@ function installCaptureHooksOnSession(ses) {
       return;
     }
 
-    if (isYtMedia) {
-      details.requestHeaders['Referer'] = 'https://www.youtube.com/';
-      details.requestHeaders['Origin'] = 'https://www.youtube.com';
-      if (!details.requestHeaders['User-Agent'] && !details.requestHeaders['user-agent']) {
-        details.requestHeaders['User-Agent'] = CHROME_UA;
-      }
-    } else if (!details.requestHeaders['Referer'] && !details.requestHeaders['referer']) {
+    if (!details.requestHeaders['Referer'] && !details.requestHeaders['referer']) {
       // Normal SC playback: soft referer only if missing
       details.requestHeaders['Referer'] = 'https://soundcloud.com/';
     }
@@ -1048,10 +1019,10 @@ function createWindow() {
   const winOpts = {
     width: 1240,
     height: 800,
-    minWidth: 920,
-    minHeight: 620,
+    minWidth: 780,
+    minHeight: 540,
     backgroundColor: '#0a0908',
-    title: 'miura',
+    title: isDev ? 'miura · DEV' : 'miura',
     icon: icon || undefined,
     autoHideMenuBar: true,
     webPreferences: {
@@ -2350,23 +2321,6 @@ function toMiuraFileUrl(absPath) {
   return pathToFileURL(resolved).href.replace(/^file:/i, 'miura-file:');
 }
 
-const { createYtAudio } = require('./ytAudio.cjs');
-let ytAudioApi = null;
-function getYtAudio() {
-  if (!ytAudioApi) {
-    ytAudioApi = createYtAudio({
-      session,
-      net,
-      protocol,
-      BrowserWindow,
-      chromeUa: typeof CHROME_UA !== 'undefined' ? CHROME_UA : undefined,
-      readProxyConfig,
-      applyProxyToSession,
-    });
-  }
-  return ytAudioApi;
-}
-
 app.whenReady().then(async () => {
   // Drop default Electron File / Edit / View / Window / Help menu
   try {
@@ -2378,7 +2332,6 @@ app.whenReady().then(async () => {
   // Local files for <audio src="miura-file://..."> (+ legacy miu-file)
   registerLocalFileProtocol('miura-file');
   registerLocalFileProtocol('miu-file');
-  getYtAudio().registerProtocol();
 
   // Optional Castlabs Widevine (only if someone swaps electron for ECS).
   // Default GitHub build uses stock Electron — open streams only.
@@ -3907,170 +3860,6 @@ app.whenReady().then(async () => {
       throw e;
     }
   });
-
-  function isYtAllowedHost(host) {
-    const h = String(host || '').toLowerCase();
-    return (
-      /(^|\.)youtube\.com$/.test(h) ||
-      /(^|\.)youtu\.be$/.test(h) ||
-      /(^|\.)googlevideo\.com$/.test(h) ||
-      /(^|\.)ytimg\.com$/.test(h) ||
-      /(^|\.)ggpht\.com$/.test(h) ||
-      /(^|\.)googleusercontent\.com$/.test(h) ||
-      /(^|\.)googleapis\.com$/.test(h) ||
-      /(^|\.)gstatic\.com$/.test(h) ||
-      /(^|\.)youtube-nocookie\.com$/.test(h) ||
-      /(^|\.)yt\.be$/.test(h) ||
-      /(^|\.)google\.com$/.test(h) ||
-      /(^|\.)youtubei\.googleapis\.com$/.test(h) ||
-      /(^|\.)youtube-ui\.l\.google\.com$/.test(h)
-    );
-  }
-
-  ipcMain.handle('yt-resolve-audio', async (_e, videoId) => {
-    try {
-      return await getYtAudio().resolveAudio(videoId);
-    } catch (e) {
-      console.error('[yt-audio]', e);
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  });
-  ipcMain.handle('yt-page-play', async (_e, payload) => {
-    try {
-      return await getYtAudio().playPage(payload || {});
-    } catch (e) {
-      console.error('[yt-audio] page', e);
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  });
-  ipcMain.handle('yt-page-command', async (_e, payload) => {
-    try {
-      return await getYtAudio().pageCommand(payload || {});
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  });
-
-  /**
-   * YouTube / Innertube fetch for renderer (youtubei.js).
-   * Renderer window.fetch dies with CORS / "Failed to fetch".
-   * Uses Chromium session (SOCKS when mode=all) + direct fallback.
-   */
-  ipcMain.handle('yt-fetch', async (_e, payload) => {
-    const url = String(payload?.url || '');
-    if (!/^https:\/\//i.test(url)) {
-      throw new Error('yt-fetch: only https — got: ' + url.slice(0, 60));
-    }
-    let host = '';
-    try {
-      host = new URL(url).hostname.toLowerCase();
-    } catch {
-      throw new Error('yt-fetch: bad url: ' + url.slice(0, 80));
-    }
-    if (!isYtAllowedHost(host)) {
-      throw new Error('yt-fetch: host not allowed: ' + host);
-    }
-
-    const method = String(payload?.method || 'GET').toUpperCase();
-    const headersIn =
-      payload?.headers && typeof payload.headers === 'object' ? { ...payload.headers } : {};
-    const headers = { ...headersIn };
-    // Drop hop-by-hop / forbidden
-    for (const k of Object.keys(headers)) {
-      if (/^(host|connection|content-length|transfer-encoding|keep-alive|user-agent)$/i.test(k)) {
-        delete headers[k];
-      }
-    }
-    headers['User-Agent'] = CHROME_UA;
-    if (!headers.Origin && !headers.origin) headers.Origin = 'https://www.youtube.com';
-    if (!headers.Referer && !headers.referer) headers.Referer = 'https://www.youtube.com/';
-
-    let body;
-    if (payload?.bodyBase64) {
-      body = Buffer.from(String(payload.bodyBase64), 'base64');
-    } else if (typeof payload?.body === 'string') {
-      body = Buffer.from(String(payload.body), 'utf8');
-    }
-
-    const doOnce = async (ses, label) => {
-      const doFetch =
-        typeof ses.fetch === 'function' ? ses.fetch.bind(ses) : net.fetch.bind(net);
-      const init = { method, headers };
-      if (body != null && method !== 'GET' && method !== 'HEAD') init.body = body;
-      const res = await doFetch(url, init);
-      const ab = await res.arrayBuffer();
-      const buf = Buffer.from(ab);
-      const outHeaders = {};
-      try {
-        res.headers.forEach((v, k) => {
-          outHeaders[String(k).toLowerCase()] = String(v);
-        });
-      } catch {
-        /* ignore */
-      }
-      console.log(
-        '[yt-fetch]',
-        label,
-        method,
-        host,
-        '→',
-        res.status,
-        buf.length,
-        'b',
-        url.replace(/\?.*/, '').slice(0, 90)
-      );
-      return {
-        status: res.status,
-        ok: res.ok,
-        url: res.url || url,
-        headers: outHeaders,
-        bodyBase64: buf.toString('base64'),
-        _via: label,
-      };
-    };
-
-    const attempts = [];
-    // Prefer app session first (user SOCKS for all traffic)
-    try {
-      const r = await doOnce(session.defaultSession, 'proxy');
-      attempts.push(`proxy:${r.status}`);
-      // Accept any completed HTTP response (incl. 4xx) — youtubei handles status
-      return { ...r, _attempts: attempts };
-    } catch (e) {
-      attempts.push(`proxy-err:${e.message || e}`);
-      console.warn('[yt-fetch proxy fail]', method, host, e?.message || e);
-    }
-
-    try {
-      const r = await doOnce(getDirectMediaSession(), 'direct');
-      attempts.push(`direct:${r.status}`);
-      return { ...r, _attempts: attempts };
-    } catch (e) {
-      console.error('[yt-fetch]', method, url.slice(0, 120), e);
-      throw new Error(
-        `YouTube network failed (${attempts.join(', ') || 'no attempts'}): ${e.message || e}`
-      );
-    }
-  });
-
-  // Quick probe so user/logs show YouTube path is alive after restart
-  setTimeout(() => {
-    void (async () => {
-      try {
-        const doFetch =
-          typeof session.defaultSession.fetch === 'function'
-            ? session.defaultSession.fetch.bind(session.defaultSession)
-            : net.fetch.bind(net);
-        const res = await doFetch('https://www.youtube.com/', {
-          method: 'GET',
-          headers: { 'User-Agent': CHROME_UA },
-        });
-        console.log('[yt-probe] youtube.com →', res.status, 'via session');
-      } catch (e) {
-        console.warn('[yt-probe] failed', e?.message || e);
-      }
-    })();
-  }, 2500);
 
   ipcMain.handle('api-fetch', async (_e, payload) => {
     const url = String(payload?.url || '');

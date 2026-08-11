@@ -152,7 +152,6 @@ export type Page =
   | 'settings'
   | 'profile'
   | 'local'
-  | 'youtube'
   | 'soundcloud'
   | 'miura-playlists';
 

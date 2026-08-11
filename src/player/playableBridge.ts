@@ -18,11 +18,7 @@ export function hashUid(uid: string): number {
 }
 
 export function playableToTrack(p: Playable): Track {
-  let permalink = p.streamUrl || p.filePath || p.uid;
-  if (p.source === 'youtube') {
-    const vid = String(p.meta?.videoId || (p.uid.startsWith('yt:') ? p.uid.slice(3) : '') || '').trim();
-    if (vid) permalink = `https://www.youtube.com/watch?v=${vid}`;
-  }
+  const permalink = p.streamUrl || p.filePath || p.uid;
   return {
     id: hashUid(p.uid),
     title: p.title,
@@ -38,56 +34,10 @@ export function playableToTrack(p: Playable): Track {
   };
 }
 
-export function extractYoutubeVideoId(
-  track?: Track | null,
-  playable?: Playable | null
-): string {
-  const fromMeta = playable?.meta?.videoId;
-  if (fromMeta != null && String(fromMeta).trim()) {
-    const v = String(fromMeta).trim();
-    if (/^[a-zA-Z0-9_-]{6,}$/.test(v)) return v;
-  }
-  if (playable?.uid?.startsWith('yt:')) {
-    const v = playable.uid.slice(3).trim();
-    if (/^[a-zA-Z0-9_-]{6,}$/.test(v)) return v;
-  }
-
-  const blobs: string[] = [];
-  if (track) {
-    blobs.push(
-      String(track.permalink_url || ''),
-      String(track.artwork_url || ''),
-      String(track.waveform_url || ''),
-      String(track.title || '')
-    );
-  }
-  if (playable) {
-    blobs.push(
-      String(playable.uid || ''),
-      String(playable.streamUrl || ''),
-      String(playable.artworkUrl || '')
-    );
-  }
-
-  for (const s of blobs) {
-    if (!s) continue;
-    if (s.startsWith('yt:')) {
-      const v = s.slice(3).trim();
-      if (/^[a-zA-Z0-9_-]{6,}$/.test(v)) return v;
-    }
-    const m =
-      s.match(
-        /(?:youtube\.com\/watch\?(?:[^#]*&)?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/|ytimg\.com\/vi\/)([a-zA-Z0-9_-]{6,})/i
-      ) || s.match(/^([a-zA-Z0-9_-]{11})$/);
-    if (m?.[1] && /^[a-zA-Z0-9_-]{6,}$/.test(m[1])) return m[1];
-  }
-  return '';
-}
-
 export function trackSource(track: Track | null | undefined): MusicSource | 'soundcloud' {
   if (!track) return 'soundcloud';
   const g = String(track.genre || '');
-  if (g === 'local' || g === 'youtube' || g === 'soundcloud') return g;
+  if (g === 'local' || g === 'soundcloud') return g;
   return 'soundcloud';
 }
 

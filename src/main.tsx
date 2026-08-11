@@ -5,6 +5,8 @@ import { MiniPlayerApp } from './pages/MiniPlayerApp';
 import { I18nProvider } from './i18n';
 import { applyAppTheme, getStoredTheme } from './theme';
 import './styles.css';
+import './skins/blood-ink.css';
+import './skins/shell-v2.css';
 
 // Apply theme before first paint of React tree
 applyAppTheme(getStoredTheme());

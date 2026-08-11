@@ -1,5 +1,5 @@
 /**
- * Parse a bulk text tracklist and resolve each line via local / SoundCloud / YouTube search.
+ * Parse a bulk text tracklist and resolve each line via local / SoundCloud search.
  * Does not download files — only finds playable matches for a miura playlist.
  */
 
@@ -14,7 +14,6 @@ import {
 import type { Track } from '../types';
 import type { Playable } from '../player/types';
 import { loadLocalLibrary } from '../sources/localLibrary';
-import { searchYouTube, ytHitToPlayable } from '../sources/youtube';
 import type { MiuraPlaylistItem } from './miuraPlaylists';
 import { slimPlayable, slimTrack } from './miuraPlaylists';
 
@@ -25,7 +24,7 @@ export type ParsedTrackLine = {
   query: string;
 };
 
-export type ImportSource = 'local' | 'soundcloud' | 'youtube';
+export type ImportSource = 'local' | 'soundcloud';
 
 export type ResolveResult = {
   status: 'found' | 'not_found' | 'error';
@@ -164,8 +163,8 @@ function scHasFullProgressive(track: Track): boolean {
 
 /**
  * Playlist import: ONLY full progressive MP3 counts as “open SC”.
- * Any encrypted format without working progressive → YouTube.
- * Empty media after enrich → YouTube (don't guess).
+ * Any encrypted format without working progressive → skip.
+ * Empty media after enrich → skip (don't guess).
  */
 function scQuickReject(track: Track): boolean {
   if (!track) return true;
@@ -179,11 +178,11 @@ function scQuickReject(track: Track): boolean {
   if (!list.length) return true;
   if (list.every((t) => t.snipped)) return true;
 
-  // Playlist rule (strict): ANY encrypted format → treat as DRM, use YouTube.
+  // Playlist rule (strict): ANY encrypted format → treat as DRM, skip.
   // SC often lists fake/dead progressive next to real encrypted HLS.
   if (scHasEncryptedFormats(track)) return true;
 
-  // No full progressive MP3 → YouTube
+  // No full progressive MP3
   if (!scHasFullProgressive(track)) return true;
 
   return false;
@@ -265,7 +264,7 @@ async function scVerifyProgressivePlayable(track: Track): Promise<boolean> {
     }
     return true;
   } catch {
-    // DRM, 404 progressive, blocked, rate limit → YouTube
+    // DRM, 404 progressive, blocked, rate limit
     return false;
   }
 }
@@ -286,7 +285,7 @@ async function enrichScTrack(tr: Track): Promise<Track> {
 
 /**
  * SC match only if progressive stream really works.
- * Returns null → caller MUST try YouTube (never return SC DRM as found).
+ * Returns null when no open progressive stream is available.
  */
 async function matchSoundCloud(line: ParsedTrackLine): Promise<ResolveResult | null> {
   try {
@@ -305,7 +304,7 @@ async function matchSoundCloud(line: ParsedTrackLine): Promise<ResolveResult | n
 
     for (const { tr } of ranked.slice(0, 5)) {
       const full = await enrichScTrack(tr);
-      // Strict gates — any DRM/encrypted path → next candidate or YouTube
+      // Strict gates — any DRM/encrypted path → next candidate
       if (scQuickReject(full)) {
         console.log('[import] SC skip (drm/meta)', full.title, full.policy, full.media?.transcodings?.map((t) => t.format?.protocol));
         continue;
@@ -332,83 +331,24 @@ async function matchSoundCloud(line: ParsedTrackLine): Promise<ResolveResult | n
       };
     }
 
-    console.log('[import] SC none playable → YouTube for', line.query);
+    console.log('[import] SC none playable → skip for', line.query);
     return null;
   } catch (e) {
-    // Don't block YouTube on SC network errors — return null to continue
+    // Network errors — return null so other sources can run
     console.warn('[import] SC error', e);
     return null;
   }
 }
 
-async function matchYouTube(line: ParsedTrackLine): Promise<ResolveResult | null> {
-  try {
-    // Prefer music-ish results
-    const q = /official|audio|lyrics|topic/i.test(line.query)
-      ? line.query
-      : `${line.query} audio`;
-    const hits = await searchYouTube(q, 8);
-    if (!hits.length) {
-      // retry without "audio" suffix
-      const hits2 = await searchYouTube(line.query, 8);
-      if (!hits2.length) return null;
-      return ytFromHits(line, hits2);
-    }
-    return ytFromHits(line, hits);
-  } catch (e) {
-    // second chance without suffix
-    try {
-      const hits = await searchYouTube(line.query, 8);
-      if (!hits.length) {
-        return { status: 'error', error: e instanceof Error ? e.message : String(e) };
-      }
-      return ytFromHits(line, hits);
-    } catch (e2) {
-      return {
-        status: 'error',
-        error: e2 instanceof Error ? e2.message : String(e2),
-      };
-    }
-  }
-}
-
-function ytFromHits(line: ParsedTrackLine, hits: Awaited<ReturnType<typeof searchYouTube>>): ResolveResult {
-  let best = hits[0];
-  let bestScore = 0;
-  for (const h of hits) {
-    const sc = scoreMatch(line, h.title, h.author);
-    if (sc > bestScore) {
-      bestScore = sc;
-      best = h;
-    }
-  }
-  // When falling back from SC DRM, accept top YT hit even with weak score
-  if (!best) best = hits[0];
-  const playable = ytHitToPlayable(best);
-  return {
-    status: 'found',
-    source: 'youtube',
-    title: playable.title,
-    artist: playable.artist,
-    artworkUrl: playable.artworkUrl,
-    durationMs: playable.durationMs,
-    playable,
-  };
-}
-
 /**
- * Resolve one line:
- *  local → YouTube → SoundCloud (verified progressive only).
- *
- * YouTube first for text tracklists: reliable streams + covers.
- * SC only when YT misses and progressive MP3 really works (byte-probed).
+ * Resolve one line: local → SoundCloud (verified progressive only).
  */
 export async function resolveTrackLine(
   line: ParsedTrackLine,
-  sources: ImportSource[] = ['local', 'youtube', 'soundcloud']
+  sources: ImportSource[] = ['local', 'soundcloud']
 ): Promise<ResolveResult> {
   const want = new Set(
-    sources.length ? sources : (['local', 'youtube', 'soundcloud'] as ImportSource[])
+    sources.length ? sources : (['local', 'soundcloud'] as ImportSource[])
   );
 
   // 1) Local files
@@ -417,51 +357,22 @@ export async function resolveTrackLine(
     if (r?.status === 'found') return r;
   }
 
-  // 2) YouTube — preferred for pasted tracklists (covers + open audio)
-  let ytError: string | undefined;
-  if (want.has('youtube')) {
-    const r = await matchYouTube(line);
-    if (r?.status === 'found' && r.playable) {
-      // Guarantee source + cover even if search thumb was junk
-      const videoId = String(r.playable.meta?.videoId || r.playable.uid.replace(/^yt:/, ''));
-      const art =
-        (r.artworkUrl && /^https?:\/\//i.test(r.artworkUrl) ? r.artworkUrl : '') ||
-        (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
-      return {
-        ...r,
-        source: 'youtube',
-        artworkUrl: art || r.artworkUrl || null,
-        playable: slimPlayable({
-          ...r.playable,
-          source: 'youtube',
-          artworkUrl: art || r.playable.artworkUrl || null,
-        }),
-        track: undefined,
-      };
-    }
-    if (r?.status === 'error') ytError = r.error;
-  }
-
-  // 3) SoundCloud — only full progressive that actually serves audio
+  // 2) SoundCloud — only full progressive that actually serves audio
   if (want.has('soundcloud')) {
     const r = await matchSoundCloud(line);
     if (r?.status === 'found' && r.source === 'soundcloud' && r.track) {
       if (!scQuickReject(r.track) && scHasFullProgressive(r.track)) {
-        console.log('[import] SC fallback ok for', line.query, '→', r.title);
+        console.log('[import] SC ok for', line.query, '→', r.title);
         return { ...r, playable: undefined };
       }
       console.log('[import] SC rejected at final gate', r.title);
     }
   }
 
-  if (ytError) {
-    return { status: 'error', error: ytError };
-  }
-
   return {
     status: 'not_found',
     error: want.has('soundcloud')
-      ? 'YouTube not found and SC has no open progressive stream'
+      ? 'No open progressive SoundCloud stream and no local match'
       : undefined,
   };
 }
@@ -469,8 +380,7 @@ export async function resolveTrackLine(
 export function applyResolveToItem(item: MiuraPlaylistItem, r: ResolveResult): MiuraPlaylistItem {
   if (r.status === 'found') {
     const source = r.source;
-    // Keep payload exclusive: SC → track only; YouTube/local → playable only.
-    // Prevents "SC" badge while the real stream is YouTube.
+    // Keep payload exclusive: SC → track only; local → playable only.
     const base: MiuraPlaylistItem = {
       id: item.id,
       query: item.query,
@@ -485,14 +395,11 @@ export function applyResolveToItem(item: MiuraPlaylistItem, r: ResolveResult): M
     if (source === 'soundcloud' && r.track) {
       return { ...base, track: slimTrack(r.track) };
     }
-    if ((source === 'youtube' || source === 'local') && r.playable) {
+    if (source === 'local' && r.playable) {
       return {
         ...base,
         playable: slimPlayable(r.playable),
-        source:
-          r.playable.source === 'youtube' || r.playable.source === 'local'
-            ? r.playable.source
-            : source,
+        source: r.playable.source === 'local' ? 'local' : source,
       };
     }
     return {

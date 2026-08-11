@@ -369,7 +369,7 @@ export function ProfilePage({
             <input
               id="pf-accent"
               type="color"
-              value={accent && /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : '#c23a2b'}
+              value={accent && /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : '#c85a8e'}
               onChange={(e) => setAccent(e.target.value)}
               disabled={busy}
             />

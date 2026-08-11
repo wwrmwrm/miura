@@ -1,0 +1,372 @@
+/* ═══════════════════════════════════════════════════════════════
+   Soft Minimal chrome — warm charcoal surfaces.
+   Loaded after styles.css. Colors come from theme CSS variables.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── titlebar ── */
+.titlebar {
+  background: color-mix(in srgb, var(--bg) 72%, transparent) !important;
+  border-bottom: 1px solid var(--line) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.titlebar-name,
+.titlebar-seal {
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  font-family: var(--sans) !important;
+  font-weight: 650 !important;
+  color: var(--accent) !important;
+}
+
+.titlebar-btn-close:hover {
+  background: #c45a6a !important;
+  color: #fff !important;
+  border-radius: 8px;
+}
+
+/* ── rail (legacy, if shown) ── */
+.rail {
+  background: color-mix(in srgb, var(--bg) 80%, transparent) !important;
+  border-right: 1px solid var(--line) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+}
+
+.miura-logo {
+  font-family: var(--sans) !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+  font-weight: 700 !important;
+  color: var(--ink) !important;
+  text-shadow: none;
+}
+
+.miura-brand-bar {
+  width: 3px !important;
+  border-radius: 99px !important;
+  background: var(--accent) !important;
+  box-shadow: none;
+}
+
+.miura-seal {
+  border-radius: 10px !important;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important;
+  color: var(--accent) !important;
+  box-shadow: none !important;
+}
+
+.rail-a {
+  border-radius: var(--radius) !important;
+  border: 1px solid transparent;
+}
+
+.rail-a:hover {
+  background: var(--fill-2) !important;
+}
+
+.rail-a.on {
+  background: var(--accent-soft) !important;
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--ink) !important;
+  box-shadow: none;
+}
+
+.rail-a.on .ico {
+  color: var(--accent) !important;
+  filter: none;
+}
+
+.rail-sep {
+  background: var(--line) !important;
+  height: 1px !important;
+}
+
+.rail-section {
+  letter-spacing: 0.08em !important;
+  color: var(--ink-3) !important;
+  opacity: 0.95;
+  font-size: 0.68rem !important;
+}
+
+.rail-pl-item {
+  border-radius: var(--radius-sm) !important;
+}
+
+.rail-pl-item.on {
+  background: var(--accent-soft) !important;
+  box-shadow: none;
+}
+
+.rail-pl-art {
+  border-radius: 8px !important;
+  border: 1px solid var(--line);
+}
+
+.rail-pl-art-ph {
+  background: var(--bg-3) !important;
+  border-radius: 8px !important;
+}
+
+.rail-foot {
+  border-top-color: var(--line) !important;
+}
+
+.rail-user {
+  border-radius: var(--radius) !important;
+}
+
+.rail-user.on,
+.rail-user:hover {
+  background: var(--fill-2) !important;
+}
+
+/* ── mast / search ── */
+.mast h1 {
+  font-family: var(--sans) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em !important;
+  font-size: 1.5rem !important;
+}
+
+.find {
+  border-radius: var(--radius-pill) !important;
+  background: var(--fill) !important;
+  border: 1px solid var(--line) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.find:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent) !important;
+  box-shadow: 0 0 0 3px var(--accent-mist) !important;
+  background: var(--bg-elevated) !important;
+}
+
+.chip {
+  border-radius: var(--radius-pill) !important;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  text-transform: none;
+  font-size: 0.8rem !important;
+  letter-spacing: -0.01em !important;
+  font-weight: 600 !important;
+  padding: 7px 14px !important;
+}
+
+.chip.on,
+.chip[aria-pressed='true'] {
+  background: var(--accent) !important;
+  color: var(--accent-ink) !important;
+  border-color: transparent !important;
+  box-shadow: none;
+}
+
+/* ── cards ── */
+.cell {
+  border-radius: var(--radius-lg) !important;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent) !important;
+  border: 1px solid var(--line) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s, background 0.15s !important;
+}
+
+.cell:hover {
+  border-color: var(--line-2) !important;
+  background: var(--bg-elevated) !important;
+  transform: translateY(-2px) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+
+.cell-top {
+  border-radius: var(--radius) !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22) !important;
+  border: none;
+}
+
+/* ── buttons ── */
+.btn-in,
+.btn-primary,
+button.primary,
+.btn.solid {
+  border-radius: var(--radius-pill) !important;
+  box-shadow: none !important;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  font-size: 0.85rem !important;
+}
+
+/* ── player bar (base; shell-v2 overrides layout) ── */
+.bar {
+  background: color-mix(in srgb, var(--bg-deep) 90%, transparent) !important;
+  border-top: 1px solid var(--line) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  box-shadow: none !important;
+}
+
+.bar::before {
+  height: 1px !important;
+  opacity: 0.5 !important;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 40%, transparent) 50%,
+    transparent 100%
+  ) !important;
+  box-shadow: none;
+  animation: none !important;
+}
+
+.bar.is-playing::before {
+  opacity: 0.7 !important;
+  animation: none !important;
+}
+
+.bar-art,
+.bar-art-ring,
+.bar-art-btn {
+  border-radius: 8px !important;
+}
+
+.bar-art {
+  border: none !important;
+  box-shadow: none;
+}
+
+.bar .ico-btn.main {
+  background: var(--ink) !important;
+  color: var(--bg-deep) !important;
+  border-radius: 50% !important;
+  box-shadow: none !important;
+}
+
+.bar .ico-btn.main:hover:not(:disabled) {
+  background: var(--accent) !important;
+  color: var(--accent-ink) !important;
+  box-shadow: none !important;
+}
+
+.bar .ico-btn.on {
+  color: var(--accent) !important;
+}
+
+.bar .ico-btn {
+  border-radius: 8px !important;
+}
+
+.seek .slider {
+  border-radius: 99px !important;
+  height: 3px !important;
+}
+
+/* ── lists ── */
+.track-row-compact:hover,
+.cat-row:hover,
+.list-row:hover {
+  background: var(--fill-2) !important;
+  border-radius: var(--radius-sm);
+}
+
+/* ── modals ── */
+.modal-card {
+  border-radius: var(--radius-xl) !important;
+  border: 1px solid var(--line) !important;
+  background: var(--bg-elevated) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-soft) !important;
+}
+
+/* ── fields ── */
+.field input[type='text'],
+.field input[type='password'],
+.field input[type='number'],
+.field select,
+.field textarea {
+  border-radius: var(--radius) !important;
+  border-color: var(--line) !important;
+  background: var(--fill) !important;
+}
+
+.field input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-mist) !important;
+}
+
+/* ── queue drawer ── */
+.queue-drawer,
+.queue-panel {
+  border-left: 1px solid var(--line) !important;
+  background: var(--bg-glass) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* ── scrollbars ── */
+* {
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 99px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink-3) 70%, transparent);
+}
+
+/* ── profile gate ── */
+.profile-boot-inner,
+.profile-gate {
+  background: var(--bg-deep) !important;
+}
+
+.theme-tile.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+.src-pill {
+  border-radius: var(--radius-pill) !important;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-size: 0.72rem !important;
+}
+
+/* ── white theme ── */
+html[data-theme='white'] .rail {
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent) !important;
+  border-right-color: var(--line) !important;
+}
+
+html[data-theme='white'] .bar {
+  background: var(--bar-bg) !important;
+  border-top-color: var(--line) !important;
+}
+
+html[data-theme='white'] .cell {
+  background: var(--bg-elevated) !important;
+  border-color: var(--line) !important;
+}
+
+html[data-theme='white'] .find {
+  background: var(--bg-elevated) !important;
+}
+
+html[data-theme='white'] .modal-card {
+  background: var(--bg-elevated) !important;
+}
+
+html[data-theme='white'] .miura-logo {
+  color: var(--ink) !important;
+  text-shadow: none;
+}
+
+html[data-theme='white'] .titlebar {
+  background: color-mix(in srgb, var(--bg-elevated) 85%, transparent) !important;
+}

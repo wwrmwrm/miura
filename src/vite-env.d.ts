@@ -281,58 +281,6 @@ interface Window {
       bodyBase64: string;
       _via?: string;
     }>;
-    
-    ytFetch: (payload: {
-      url: string;
-      method?: string;
-      headers?: Record<string, string>;
-      body?: string | null;
-      bodyBase64?: string | null;
-    }) => Promise<{
-      status: number;
-      ok: boolean;
-      url?: string;
-      headers: Record<string, string>;
-      bodyBase64: string;
-      _via?: string;
-      _attempts?: string[];
-    }>;
-    
-    ytResolveAudio: (videoId: string) => Promise<{
-      ok: boolean;
-      url?: string;
-      mime?: string;
-      protocol?: 'progressive' | 'hls';
-      client?: string;
-      error?: string;
-    }>;
-    
-    ytPagePlay: (payload: {
-      videoId: string;
-      volume?: number;
-      muted?: boolean;
-      startAt?: number;
-    }) => Promise<{
-      ok: boolean;
-      mode?: string;
-      duration?: number;
-      currentTime?: number;
-      paused?: boolean;
-      error?: string;
-    }>;
-    ytPageCommand: (payload: {
-      cmd: 'play' | 'pause' | 'seek' | 'volume' | 'status' | 'stop';
-      value?: number;
-    }) => Promise<{
-      ok: boolean;
-      hasMedia?: boolean;
-      paused?: boolean;
-      ended?: boolean;
-      currentTime?: number;
-      duration?: number;
-      isAd?: boolean;
-      error?: string;
-    }>;
     scEmbedPlay: (payload: {
       url: string;
       volume?: number;

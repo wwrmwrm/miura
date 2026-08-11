@@ -49,10 +49,16 @@ export function VirtualList<T>({
   // If content fits entirely, no need to reserve a tall empty box
   const scrollerH = contentH === 0 ? 0 : height != null ? height : Math.min(contentH, availH);
 
+  const scrollRaf = useRef(0);
   const onScroll = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    setScrollTop(el.scrollTop);
+    // Coalesce scroll state to one update per frame — smoother lists
+    if (scrollRaf.current) return;
+    scrollRaf.current = requestAnimationFrame(() => {
+      scrollRaf.current = 0;
+      if (scrollerRef.current) setScrollTop(scrollerRef.current.scrollTop);
+    });
   }, []);
 
   const measure = useCallback(() => {
@@ -86,6 +92,13 @@ export function VirtualList<T>({
   useLayoutEffect(() => {
     measure();
   }, [measure, total, contentH]);
+
+  useLayoutEffect(
+    () => () => {
+      if (scrollRaf.current) cancelAnimationFrame(scrollRaf.current);
+    },
+    []
+  );
 
   useLayoutEffect(() => {
     if (height != null) return;

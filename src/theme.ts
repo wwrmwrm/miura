@@ -37,7 +37,7 @@ export function applyAppTheme(theme: AppTheme) {
   }
   // Match window chrome / custom title bar
   const deep =
-    theme === 'white' ? '#fffcf8' : theme === 'gray' ? '#1e1b1a' : '#0a0908';
+    theme === 'white' ? '#efeae3' : theme === 'gray' ? '#1c1917' : '#0c0b0a';
   document.documentElement.style.background = deep;
   if (document.body) document.body.style.background = deep;
   try {

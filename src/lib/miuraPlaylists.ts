@@ -13,14 +13,14 @@ export type MiuraPlaylistItem = {
   /** Original text line */
   query: string;
   status: MiuraPlaylistItemStatus;
-  source?: 'local' | 'soundcloud' | 'youtube';
+  source?: 'local' | 'soundcloud';
   title?: string;
   artist?: string;
   artworkUrl?: string | null;
   durationMs?: number;
   /** SoundCloud track (when source=soundcloud) — keep slim */
   track?: Track;
-  /** YouTube / local playable */
+  /** Local playable */
   playable?: Playable;
   error?: string;
   resolvedAt?: number;
@@ -101,59 +101,37 @@ export function slimPlayable(p: Playable): Playable {
  */
 export function itemSource(
   it: Pick<MiuraPlaylistItem, 'source' | 'track' | 'playable'>
-): 'local' | 'soundcloud' | 'youtube' | undefined {
+): 'local' | 'soundcloud' | undefined {
   const p = it.playable;
   if (p) {
-    if (p.source === 'youtube' || p.uid?.startsWith('yt:') || p.meta?.videoId) return 'youtube';
     if (p.source === 'local' || p.uid?.startsWith('local:') || p.filePath) return 'local';
   }
-  if (it.source === 'local' || it.source === 'youtube' || it.source === 'soundcloud') {
+  if (it.source === 'local' || it.source === 'soundcloud') {
     return it.source;
   }
   if (it.track) return 'soundcloud';
   return undefined;
 }
 
-function ensureYtArt(it: MiuraPlaylistItem): MiuraPlaylistItem {
-  if (!it.playable) return it;
-  const isYt =
-    it.playable.source === 'youtube' ||
-    it.playable.uid?.startsWith('yt:') ||
-    Boolean(it.playable.meta?.videoId);
-  if (!isYt) return it;
-  const videoId = String(
-    it.playable.meta?.videoId || it.playable.uid.replace(/^yt:/, '') || ''
-  ).trim();
-  const artOk = it.artworkUrl && /^https?:\/\//i.test(it.artworkUrl);
-  const playArtOk = it.playable.artworkUrl && /^https?:\/\//i.test(it.playable.artworkUrl);
-  if (artOk && playArtOk && it.source === 'youtube' && !it.track) return it;
-  const art =
-    (artOk ? it.artworkUrl : null) ||
-    (playArtOk ? it.playable.artworkUrl : null) ||
-    (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null);
-  return {
-    ...it,
-    source: 'youtube',
-    track: undefined,
-    artworkUrl: art,
-    playable: {
-      ...it.playable,
-      source: 'youtube',
-      artworkUrl: art,
-      meta: { ...it.playable.meta, videoId: videoId || it.playable.meta?.videoId },
-    },
-  };
-}
-
 export function normalizePlaylistItem(it: MiuraPlaylistItem): MiuraPlaylistItem {
   let next = it;
-  if (
-    it.playable &&
-    (it.playable.source === 'youtube' ||
-      it.playable.uid?.startsWith('yt:') ||
-      it.playable.meta?.videoId)
-  ) {
-    next = ensureYtArt(it);
+  // Drop legacy YouTube playlist items (source removed from product)
+  const legacySrc = String(it.source || '');
+  const playableSrc = String(it.playable?.source || '');
+  const isLegacyYt =
+    playableSrc === 'youtube' ||
+    Boolean(it.playable?.uid?.startsWith('yt:')) ||
+    Boolean(it.playable?.meta?.videoId) ||
+    legacySrc === 'youtube';
+  if (isLegacyYt) {
+    next = {
+      ...it,
+      status: 'not_found',
+      source: undefined,
+      playable: undefined,
+      track: undefined,
+      error: 'Source removed',
+    };
   } else if (it.playable?.source === 'local' || it.playable?.uid?.startsWith('local:')) {
     if (it.source !== 'local' || it.track) {
       next = { ...it, source: 'local', track: undefined };
@@ -351,6 +329,39 @@ export function appendItems(playlistId: string, queries: string[]): MiuraPlaylis
   const pl = getPlaylist(playlistId);
   if (!pl) return null;
   const items = queries.filter(Boolean).map(newPlaylistItem);
+  return updatePlaylist({ ...pl, items: [...pl.items, ...items] }, { debounceMs: 0 });
+}
+
+/** Add already-resolved playables (local files, etc.) as ready tracks. */
+export function appendPlayables(playlistId: string, playables: Playable[]): MiuraPlaylist | null {
+  const pl = getPlaylist(playlistId);
+  if (!pl || !playables.length) return null;
+  const seen = new Set(
+    pl.items
+      .map((it) => it.playable?.uid || (it.track ? `sc:${it.track.id}` : ''))
+      .filter(Boolean)
+  );
+  const items: MiuraPlaylistItem[] = [];
+  for (const p of playables) {
+    const playable = slimPlayable(p);
+    if (!playable.uid || seen.has(playable.uid)) continue;
+    seen.add(playable.uid);
+    const artist = playable.artist || '';
+    const title = playable.title || 'Track';
+    items.push({
+      id: uid(),
+      query: artist ? `${artist} - ${title}` : title,
+      status: 'found',
+      source: playable.source === 'local' ? 'local' : 'soundcloud',
+      title,
+      artist: artist || undefined,
+      artworkUrl: playable.artworkUrl ?? null,
+      durationMs: playable.durationMs,
+      playable,
+      resolvedAt: Date.now(),
+    });
+  }
+  if (!items.length) return pl;
   return updatePlaylist({ ...pl, items: [...pl.items, ...items] }, { debounceMs: 0 });
 }
 

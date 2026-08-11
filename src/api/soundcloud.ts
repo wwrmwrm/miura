@@ -200,16 +200,27 @@ export async function ensureAccessToken(): Promise<string> {
 
 export function getThemeAccent(): string {
   const stored = localStorage.getItem(THEME_KEY);
-  // migrate previous theme defaults → soft vermillion (Japan / lacquer)
+  // migrate previous defaults → sakura ink (rose-magenta)
   if (
     !stored ||
     stored === '#c8f06c' ||
     stored === '#6c8cff' ||
     stored === '#ff5500' ||
     stored === '#ff5a3c' ||
-    stored === '#fc3c44'
+    stored === '#fc3c44' ||
+    stored === '#c23a2b' ||
+    stored === '#c45c3e' ||
+    stored === '#b54a32' ||
+    stored === '#e01111' ||
+    stored === '#ff2a2a' ||
+    stored === '#8b7cf6' ||
+    stored === '#a596ff' ||
+    stored === '#6b5fd4' ||
+    stored === '#7a6ee0' ||
+    stored === '#7a72c8' ||
+    stored === '#e8a070'
   ) {
-    return '#c23a2b';
+    return '#c85a8e';
   }
   return stored;
 }

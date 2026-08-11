@@ -58,13 +58,12 @@ import { usePlayer } from './hooks/usePlayer';
 import { useI18n, useT, LOCALE_LABELS, LOCALE_ORDER, type Locale } from './i18n';
 import { TrackPage } from './pages/TrackPage';
 import { LocalPage } from './pages/LocalPage';
-import { YouTubePage } from './pages/YouTubePage';
 import { MiuraMark } from './components/MiuraLogo';
 import { EmptyState } from './components/EmptyState';
 import { QueueDrawer } from './components/QueueDrawer';
 import { SourceBadge } from './components/SourceBadge';
-import { extractYoutubeVideoId, getPlayable } from './player/playableBridge';
-import { youtubeUid } from './player/types';
+import { VirtualList } from './components/VirtualList';
+import { getPlayable } from './player/playableBridge';
 import { applyAppTheme, getStoredTheme, THEME_ORDER, type AppTheme } from './theme';
 import { useMediaHotkeys } from './hooks/useMediaHotkeys';
 import { loadRecent, pushRecent, trackToRecent } from './lib/recent';
@@ -102,6 +101,7 @@ import {
 } from './lib/miuraProfile';
 import { setActiveProfileScope } from './lib/profileScope';
 import {
+  createPlaylist as createMiuraPlaylist,
   invalidatePlaylistCache,
   loadPlaylists as loadMiuraPlaylists,
   playlistCover as miuraPlaylistCover,
@@ -109,7 +109,6 @@ import {
 } from './lib/miuraPlaylists';
 import { resolveMusicUrl } from './lib/urlResolve';
 import { cacheGet, cacheSet } from './lib/searchCache';
-import { searchYouTube, ytHitToPlayable } from './sources/youtube';
 import { ProfileGate } from './components/ProfileGate';
 import { ProfilePage } from './pages/ProfilePage';
 import { MiuraPlaylistsPage } from './pages/MiuraPlaylistsPage';
@@ -123,6 +122,7 @@ import type {
   Track,
   TrackComment,
 } from './types';
+import miuraMarkUrl from './assets/miura-mark.png';
 
 /** Soft white accent — not pure #ffffff (contrast / solid buttons). */
 const ACCENT_WHITE = '#f2f2f7';
@@ -187,7 +187,6 @@ export default function App() {
   const [queueOpen, setQueueOpen] = useState(false);
   const [recent, setRecent] = useState(() => loadRecent());
   const [favorites, setFavorites] = useState<FavItem[]>(() => loadFavorites());
-  const [ytHits, setYtHits] = useState<Playable[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [users, setUsers] = useState<SoundCloudUser[]>([]);
@@ -212,6 +211,8 @@ export default function App() {
   const [createPlOpen, setCreatePlOpen] = useState(false);
   const [createPlTitle, setCreatePlTitle] = useState('');
   const [createPlBusy, setCreatePlBusy] = useState(false);
+  const [createMiuraPlOpen, setCreateMiuraPlOpen] = useState(false);
+  const [createMiuraPlTitle, setCreateMiuraPlTitle] = useState('');
   const [addToPlTrack, setAddToPlTrack] = useState<Track | null>(null);
   const [addToPlBusy, setAddToPlBusy] = useState(false);
   const [renamePlOpen, setRenamePlOpen] = useState(false);
@@ -517,26 +518,6 @@ export default function App() {
         player.playPlayable(f.playable);
         return;
       }
-      const fromId = String(f.id || '').replace(/^(youtube:|yt:)/i, '').trim();
-      const vid =
-        extractYoutubeVideoId(f.track || null, null) ||
-        (f.source === 'youtube' && /^[a-zA-Z0-9_-]{6,}$/.test(fromId) ? fromId : '');
-      if (vid) {
-        const p: Playable = {
-          uid: youtubeUid(vid),
-          source: 'youtube',
-          title: f.title || `YouTube ${vid}`,
-          artist: f.artist || '',
-          durationMs: f.track?.duration || 0,
-          artworkUrl:
-            f.artworkUrl ||
-            f.track?.artwork_url ||
-            `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-          meta: { videoId: vid },
-        };
-        player.playPlayable(p);
-        return;
-      }
       if (f.track) player.playTrack(f.track);
     },
     [player]
@@ -555,16 +536,12 @@ export default function App() {
     }
 
     const pushPresence = () => {
-      // Prefer track art → playable art (YT/local http) → user avatar
+      // Prefer track art → playable art → user avatar
       const playable = getPlayable(track.id);
       const candidates = [
         track.artwork_url,
         playable?.artworkUrl,
         track.user?.avatar_url,
-        // YouTube fallback from uid
-        playable?.source === 'youtube' && playable.uid.startsWith('yt:')
-          ? `https://i.ytimg.com/vi/${playable.uid.slice(3)}/hqdefault.jpg`
-          : null,
       ].filter(Boolean) as string[];
 
       let cover = '';
@@ -605,9 +582,7 @@ export default function App() {
               typeof playable.meta.url === 'string' &&
               /^https?:\/\//i.test(playable.meta.url)
             ? playable.meta.url
-            : playable?.source === 'youtube' && playable.uid.startsWith('yt:')
-              ? `https://www.youtube.com/watch?v=${playable.uid.slice(3)}`
-              : undefined;
+            : undefined;
 
       void window.electronAPI?.discordSetPresence?.({
         title: track.title,
@@ -646,9 +621,7 @@ export default function App() {
     const art =
       track?.artwork_url ||
       playable?.artworkUrl ||
-      (playable?.source === 'youtube' && playable.uid.startsWith('yt:')
-        ? `https://i.ytimg.com/vi/${playable.uid.slice(3)}/mqdefault.jpg`
-        : null);
+      null;
     const httpArt =
       art &&
       !art.startsWith('data:') &&
@@ -688,22 +661,18 @@ export default function App() {
         return;
       }
 
-      // Paste URL → play
-      if (/^https?:\/\//i.test(trimmed) || /youtu\.?be/i.test(trimmed)) {
+      // Paste URL → play (SoundCloud only)
+      if (/^https?:\/\//i.test(trimmed)) {
         setLoading(true);
         setError(null);
         try {
           const resolved = await resolveMusicUrl(trimmed);
-          if (resolved.kind === 'youtube') {
-            player.playPlayable(resolved.playable);
-            setStatus('YouTube');
-            setSearchHistory(pushSearchHistory(trimmed));
-          } else if (resolved.kind === 'soundcloud') {
+          if (resolved.kind === 'soundcloud') {
             player.playTrack(resolved.track, [resolved.track]);
             setStatus('SoundCloud');
             setSearchHistory(pushSearchHistory(trimmed));
           } else {
-            setError('Ссылка не распознана (SoundCloud / YouTube)');
+            setError('Ссылка не распознана (нужна ссылка SoundCloud)');
           }
         } catch (e) {
           setError(e instanceof Error ? e.message : 'URL error');
@@ -730,41 +699,24 @@ export default function App() {
             setTracks([]);
             console.warn('[search] SC tracks', e);
           }
-          let ytCount = 0;
-          try {
-            const yk = `yt:${trimmed}`;
-            const yc = cacheGet<Playable[]>(yk);
-            const hits = yc || (await searchYouTube(trimmed, 12)).map(ytHitToPlayable);
-            if (!yc) cacheSet(yk, hits);
-            setYtHits(hits);
-            ytCount = hits.length;
-          } catch (e) {
-            setYtHits([]);
-            console.warn('[search] YT', e);
-          }
-          setStatus(`${scTracks.length} SC · ${ytCount} YT`);
-          if (!scTracks.length && !ytCount) {
+          setStatus(scTracks.length ? `${scTracks.length}` : t.common.empty);
+          if (!scTracks.length) {
             setError(null);
-            setStatus(t.youtube.noResults);
           }
         } else if (tab === 'playlists') {
-          setYtHits([]);
           setTracks([]);
           try {
             const cached = cacheGet<{ collection: Playlist[] }>(cacheKey);
             const res = cached || (await searchPlaylists(trimmed, 36));
             if (!cached) cacheSet(cacheKey, res);
             setPlaylists(res.collection || []);
-            setStatus(
-              res.collection?.length ? `${res.collection.length}` : t.youtube.noResults
-            );
+            setStatus(res.collection?.length ? `${res.collection.length}` : t.common.empty);
           } catch (e) {
             setPlaylists([]);
             setError(e instanceof Error ? e.message : 'Ошибка поиска');
           }
         } else {
           // users / people
-          setYtHits([]);
           setTracks([]);
           setPlaylists([]);
           try {
@@ -772,9 +724,7 @@ export default function App() {
             const res = cached || (await searchUsers(trimmed, 36));
             if (!cached) cacheSet(cacheKey, res);
             setUsers(res.collection || []);
-            setStatus(
-              res.collection?.length ? `${res.collection.length}` : t.youtube.noResults
-            );
+            setStatus(res.collection?.length ? `${res.collection.length}` : t.common.empty);
           } catch (e) {
             setUsers([]);
             setError(e instanceof Error ? e.message : 'Ошибка поиска');
@@ -786,7 +736,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [searchTab, t.youtube.noResults]
+    [searchTab, t.common.empty]
   );
 
   const playList = useCallback(
@@ -936,13 +886,13 @@ export default function App() {
   }, [session?.user]);
 
   const go = async (id: Page) => {
-    // SC cloud library needs login
-    if (['likes', 'playlists'].includes(id) && !isLoggedIn) {
+    // SC likes need login
+    if (id === 'likes' && !isLoggedIn) {
       navigateTo('settings');
       setError('Войди в SoundCloud');
       return;
     }
-    // Media library always opens unified miura page (favs + optional SC)
+    // Media library always opens unified page (favs + optional SC)
     if (id === 'library') {
       setLibraryView('favs');
       setFavorites(loadFavorites());
@@ -950,10 +900,19 @@ export default function App() {
       if (isLoggedIn) void loadLibrary();
       return;
     }
+    // Playlists library tab (SC + own miura playlists)
+    if (id === 'playlists') {
+      setLibraryView('sc-playlists');
+      setFocusMiuraPlaylistId(null);
+      navigateTo('library');
+      refreshRailPlaylists();
+      if (isLoggedIn) void loadLibrary();
+      return;
+    }
     navigateTo(id);
     if (id === 'home') await loadHome();
-    if (id === 'likes' || id === 'playlists') {
-      setLibraryView(id === 'playlists' ? 'sc-playlists' : 'sc-likes');
+    if (id === 'likes') {
+      setLibraryView('sc-likes');
       navigateTo('library');
       await loadLibrary();
     }
@@ -1396,52 +1355,55 @@ export default function App() {
     settings: t.nav.settings,
     profile: t.profile.pageTitle,
     local: t.nav.local,
-    youtube: t.nav.youtube,
     soundcloud: t.nav.soundcloud,
-    'miura-playlists': t.nav.miuraPlaylists,
+    'miura-playlists': t.nav.playlists,
   };
 
   const title =
     page === 'home'
       ? t.nav.home
-      : isLibraryPage
-        ? t.nav.library
-        : page === 'playlist' && activePlaylist
-          ? activePlaylist.title
-          : page === 'track' && activeTrack
-            ? activeTrack.title
-            : page === 'user' && activeUser
-              ? activeUser.username
-              : pageTitles[page] || page;
+      : isLibraryPage && libraryView === 'sc-playlists'
+        ? t.nav.playlists
+        : isLibraryPage
+          ? t.nav.library
+          : page === 'miura-playlists'
+            ? t.nav.playlists
+            : page === 'playlist' && activePlaylist
+              ? activePlaylist.title
+              : page === 'track' && activeTrack
+                ? activeTrack.title
+                : page === 'user' && activeUser
+                  ? activeUser.username
+                  : pageTitles[page] || page;
 
   useEffect(() => {
-    document.title = title ? `miura · ${title}` : 'miura';
+    const dev = Boolean(import.meta.env.DEV);
+    const base = dev ? 'miura · DEV' : 'miura';
+    document.title = title ? `${base} · ${title}` : base;
   }, [title]);
 
   const mainNav: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
     { id: 'home', label: t.nav.home, icon: <IconHome /> },
     { id: 'search', label: t.nav.search, icon: <IconSearch /> },
     { id: 'library', label: t.nav.library, icon: <IconLibrary /> },
-    { id: 'local', label: t.nav.local, icon: <IconLibrary /> },
-    { id: 'miura-playlists', label: t.nav.miuraPlaylists, icon: <IconPlaylist /> },
   ];
 
   const navActive = (id: Page) =>
     page === id ||
     (id === 'library' && (page === 'library' || page === 'likes' || page === 'playlists'));
 
-  const ytFavorites = useMemo(
-    () => favorites.filter((f) => f.source === 'youtube'),
-    [favorites]
-  );
-  const otherFavorites = useMemo(
-    () => favorites.filter((f) => f.source !== 'youtube'),
-    [favorites]
+  const petalField = (
+    <div className="petal-field" aria-hidden>
+      {Array.from({ length: 12 }, (_, i) => (
+        <span key={i} className="petal" />
+      ))}
+    </div>
   );
 
   if (!bootDone || !profileReady) {
     return (
       <div className="shell theme-frame has-titlebar profile-boot">
+        {petalField}
         <TitleBar />
         <div className="profile-boot-inner">
           <MiuraMark />
@@ -1454,26 +1416,38 @@ export default function App() {
   if (!hasMiuraProfile) {
     return (
       <div className="shell theme-frame has-titlebar profile-gate-shell">
+        {petalField}
         <TitleBar />
         <ProfileGate profiles={miuraProfiles} onReady={applyMiuraProfileState} />
       </div>
     );
   }
 
-  return (
-    <div className="shell theme-frame has-titlebar">
-      <TitleBar />
-      <aside className="rail rail-wide" aria-label="Навигация">
-        <div className="mark">
-          <MiuraMark compact />
-        </div>
+  const nowTrack = player.current;
+  const nowArt = nowTrack
+    ? artworkUrl(nowTrack.artwork_url || nowTrack.user?.avatar_url, 't500x500')
+    : null;
 
-        <nav className="rail-nav">
+  return (
+    <div className={`shell shell-v2 theme-frame has-titlebar ${nowTrack ? 'has-now' : ''}`}>
+      {petalField}
+      <TitleBar />
+
+      {/* ── v2 top command bar (replaces left rail) ── */}
+      <header className="topbar" aria-label="Навигация">
+        <button type="button" className="topbar-brand" onClick={() => void go('home')} title="miura">
+          <span className="topbar-brand-mark" aria-hidden>
+            <img className="topbar-brand-logo" src={miuraMarkUrl} alt="" draggable={false} />
+          </span>
+          <span className="topbar-brand-word">MIURA</span>
+        </button>
+
+        <nav className="topbar-nav">
           {mainNav.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`rail-a rail-a-row ${navActive(item.id) ? 'on' : ''}`}
+              className={`topbar-link ${navActive(item.id) ? 'on' : ''}`}
               onClick={() => {
                 if (item.id === 'miura-playlists') setFocusMiuraPlaylistId(null);
                 void go(item.id);
@@ -1482,153 +1456,195 @@ export default function App() {
               aria-label={item.label}
               aria-current={navActive(item.id) ? 'page' : undefined}
             >
-              <span className="ico">{item.icon}</span>
-              <span className="t">{item.label}</span>
+              <span className="topbar-link-ico">{item.icon}</span>
+              <span className="topbar-link-t">{item.label}</span>
             </button>
           ))}
+        </nav>
 
-          <div className="rail-sep" role="presentation" />
+        <form
+          className="topbar-find"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runSearch(query);
+          }}
+        >
+          <span className="find-ico">
+            <IconSearch />
+          </span>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t.common.search}
+            spellCheck={false}
+          />
+          <button type="submit" disabled={!query.trim()}>
+            {t.common.search}
+          </button>
+        </form>
 
-          <div className="rail-section">{t.nav.miuraPlaylists}</div>
-          <div className="rail-pl-list">
-            {railPlaylists.length === 0 ? (
-              <button
-                type="button"
-                className="rail-pl-empty"
-                onClick={() => openMiuraPlaylist(null)}
-              >
-                {t.playlists.create}
-              </button>
+        <div className="topbar-actions">
+          {!isLoggedIn && (
+            <button type="button" className="topbar-btn" onClick={() => handleLogin()}>
+              {t.soundcloud.login}
+            </button>
+          )}
+          <button
+            type="button"
+            className="topbar-btn"
+            onClick={() => setQueueOpen(true)}
+            title={t.nav.queue}
+          >
+            {t.nav.queue}
+            {player.queue.length > 0 ? (
+              <span className="topbar-badge">{player.queue.length}</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            className={`topbar-icon ${page === 'settings' ? 'on' : ''}`}
+            onClick={() => navigateTo('settings')}
+            title={t.nav.settings}
+            aria-label={t.nav.settings}
+          >
+            <IconSettings />
+          </button>
+          <button
+            type="button"
+            className={`topbar-user ${page === 'profile' ? 'on' : ''}`}
+            onClick={() => navigateTo('profile')}
+            title={miuraProfile?.displayName || t.profile.yourProfile}
+          >
+            {miuraProfile?.avatarUrl ? (
+              <img className="topbar-av" src={miuraProfile.avatarUrl} alt="" />
             ) : (
-              railPlaylists.slice(0, 40).map((pl) => {
+              <span className="topbar-av ph">{profileInitials(miuraProfile?.displayName || '?')}</span>
+            )}
+          </button>
+        </div>
+      </header>
+
+      {/* playlist ribbon under topbar */}
+      <div className="pl-ribbon" aria-label={t.nav.miuraPlaylists}>
+        <span className="pl-ribbon-label">{t.nav.miuraPlaylists}</span>
+        <div className="pl-ribbon-scroll">
+          {railPlaylists.length === 0 ? (
+            <button type="button" className="pl-ribbon-empty" onClick={() => openMiuraPlaylist(null)}>
+              + {t.playlists.create}
+            </button>
+          ) : (
+            <>
+              {railPlaylists.slice(0, 24).map((pl) => {
                 const cover = miuraPlaylistCover(pl);
                 const on = page === 'miura-playlists' && focusMiuraPlaylistId === pl.id;
                 return (
                   <button
                     key={pl.id}
                     type="button"
-                    className={`rail-pl-item ${on ? 'on' : ''}`}
+                    className={`pl-ribbon-item ${on ? 'on' : ''}`}
                     title={pl.title}
                     onClick={() => openMiuraPlaylist(pl.id)}
                   >
-                    <span className="rail-pl-art">
+                    <span className="pl-ribbon-art">
                       {cover ? (
                         <img src={cover} alt="" loading="lazy" referrerPolicy="no-referrer" />
                       ) : (
-                        <span className="rail-pl-art-ph">♪</span>
+                        <span>♪</span>
                       )}
                     </span>
-                    <span className="rail-pl-name">{pl.title}</span>
+                    <span className="pl-ribbon-name">{pl.title}</span>
                   </button>
                 );
-              })
-            )}
-          </div>
-        </nav>
-
-        <div className="rail-foot">
-          <button
-            type="button"
-            className={`rail-user ${page === 'profile' ? 'on' : ''}`}
-            onClick={() => navigateTo('profile')}
-            title={miuraProfile?.displayName || t.profile.yourProfile}
-          >
-            {miuraProfile?.avatarUrl ? (
-              <img className="who-av" src={miuraProfile.avatarUrl} alt="" />
-            ) : (
-              <div className="who-av ph">{profileInitials(miuraProfile?.displayName || '?')}</div>
-            )}
-            <span className="rail-user-name">{miuraProfile?.displayName}</span>
-          </button>
-          <button
-            type="button"
-            className={`rail-a ${page === 'settings' ? 'on' : ''}`}
-            onClick={() => navigateTo('settings')}
-            title={t.nav.settings}
-            aria-label={t.nav.settings}
-          >
-            <span className="ico">
-              <IconSettings />
-            </span>
-            <span className="t">{t.nav.settings}</span>
-          </button>
-        </div>
-      </aside>
-
-      <main className="stage">
-        <header className="mast">
-          <div className="mast-row">
-            <h1>{title}</h1>
-            {!isLoggedIn && (
-              <button type="button" className="btn" onClick={() => handleLogin()} style={{ flexShrink: 0 }}>
-                {t.soundcloud.login}
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn"
-              style={{ flexShrink: 0 }}
-              onClick={() => setQueueOpen(true)}
-              title={t.nav.queue}
-            >
-              {t.nav.queue}
-              {player.queue.length > 0 ? ` · ${player.queue.length}` : ''}
-            </button>
-            <form
-              className="find"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void runSearch(query);
-              }}
-            >
-              <span className="find-ico">
-                <IconSearch />
-              </span>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Поиск · или вставь ссылку SC / YT"
-                spellCheck={false}
-              />
-              <button type="submit" disabled={!query.trim()}>
-                {t.common.search}
-              </button>
-            </form>
-          </div>
-          {page === 'search' && (
-            <div className="chips">
-              {(['tracks', 'playlists', 'users'] as SearchTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  className={`chip ${searchTab === tab ? 'on' : ''}`}
-                  onClick={() => void runSearch(query, tab)}
-                >
-                  {tab === 'tracks'
-                    ? t.local.viewTracks
-                    : tab === 'playlists'
-                      ? t.nav.playlists
-                      : peopleLabel}
-                </button>
-              ))}
-            </div>
-          )}
-          {isLibraryPage && (
-            <div className="chips">
+              })}
               <button
                 type="button"
-                className={`chip ${libraryView === 'favs' ? 'on' : ''}`}
-                onClick={() => {
-                  setLibraryView('favs');
-                  navigateTo('library');
-                  setFavorites(loadFavorites());
-                }}
+                className="pl-ribbon-empty"
+                onClick={() => openMiuraPlaylist(null)}
+                title={t.playlists.create}
               >
-                ★ {t.profile.statFavs}
-                {favorites.length ? ` · ${favorites.length}` : ''}
+                +
               </button>
-              {isLoggedIn && (
-                <>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className={`workspace ${nowTrack ? 'has-now' : ''}`}>
+        {nowTrack && (
+          <aside className="now-stage" aria-label="Now playing">
+            <div className="now-stage-glow" aria-hidden />
+            <div className="now-stage-art-wrap">
+              {nowArt ? (
+                <img className="now-stage-art" src={nowArt} alt="" draggable={false} />
+              ) : (
+                <div className="now-stage-art ph">MIURA</div>
+              )}
+            </div>
+            <div className="now-stage-meta">
+              <div className="now-stage-kicker">
+                {player.state === 'playing' ? 'NOW PLAYING' : player.state === 'loading' ? 'LOADING' : 'PAUSED'}
+              </div>
+              <button
+                type="button"
+                className="now-stage-title"
+                onClick={() => void openTrack(nowTrack)}
+                title={nowTrack.title}
+              >
+                {nowTrack.title}
+              </button>
+              <button
+                type="button"
+                className="now-stage-artist"
+                onClick={() => nowTrack.user && void openUser(nowTrack.user)}
+              >
+                {nowTrack.user?.username || '—'}
+              </button>
+              <div className="now-stage-chips">
+                <SourceBadge track={nowTrack} />
+                {isGoPlusOnlyTrack(nowTrack) ? <GoPlusBadge /> : null}
+              </div>
+            </div>
+          </aside>
+        )}
+
+        <main className="stage">
+          <header className="mast mast-v2">
+            <div className="mast-row">
+              <h1>{title}</h1>
+            </div>
+            {page === 'search' && (
+              <div className="chips">
+                {(['tracks', 'playlists', 'users'] as SearchTab[]).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    className={`chip ${searchTab === tab ? 'on' : ''}`}
+                    onClick={() => void runSearch(query, tab)}
+                  >
+                    {tab === 'tracks'
+                      ? t.local.viewTracks
+                      : tab === 'playlists'
+                        ? t.nav.playlists
+                        : peopleLabel}
+                  </button>
+                ))}
+              </div>
+            )}
+            {isLibraryPage && (
+              <div className="chips">
+                <button
+                  type="button"
+                  className={`chip ${libraryView === 'favs' ? 'on' : ''}`}
+                  onClick={() => {
+                    setLibraryView('favs');
+                    navigateTo('library');
+                    setFavorites(loadFavorites());
+                  }}
+                >
+                  ★ {t.profile.statFavs}
+                  {favorites.length ? ` · ${favorites.length}` : ''}
+                </button>
+                {isLoggedIn && (
                   <button
                     type="button"
                     className={`chip ${libraryView === 'sc-likes' ? 'on' : ''}`}
@@ -1641,27 +1657,31 @@ export default function App() {
                     SC {t.nav.likes}
                     {likedTracks.length ? ` · ${likedTracks.length}` : ''}
                   </button>
-                  <button
-                    type="button"
-                    className={`chip ${libraryView === 'sc-playlists' ? 'on' : ''}`}
-                    onClick={() => {
-                      setLibraryView('sc-playlists');
-                      navigateTo('library');
-                      void loadLibrary();
-                    }}
-                  >
-                    SC {t.nav.playlists}
-                    {libraryPlaylists.length || likedPlaylists.length
-                      ? ` · ${libraryPlaylists.length + likedPlaylists.length}`
-                      : ''}
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </header>
+                )}
+                <button
+                  type="button"
+                  className={`chip ${libraryView === 'sc-playlists' ? 'on' : ''}`}
+                  onClick={() => {
+                    setLibraryView('sc-playlists');
+                    navigateTo('library');
+                    refreshRailPlaylists();
+                    if (isLoggedIn) void loadLibrary();
+                  }}
+                >
+                  {t.nav.playlists}
+                  {(railPlaylists.length || libraryPlaylists.length || likedPlaylists.length)
+                    ? ` · ${railPlaylists.length + libraryPlaylists.length + likedPlaylists.length}`
+                    : ''}
+                </button>
+              </div>
+            )}
+          </header>
 
-        <div className="scroll">
+          <div className="scroll">
+          <div
+            key={`${page}-${libraryView}-${searchTab}-${homeTab}`}
+            className="view-pane"
+          >
           {loading && (
             <div className="load">
               <span className="pulse" />
@@ -1843,76 +1863,8 @@ export default function App() {
                   onOpenTrack={(tr) => void openTrack(tr)}
                 />
               )}
-              {ytHits.length > 0 && (
-                <section className="chapter">
-                  <div className="chapter-h">
-                    <h2>YouTube · {ytHits.length}</h2>
-                  </div>
-                  <div className="cat track-list-compact">
-                    {ytHits.map((p, i) => {
-                      const favId = favIdFromPlayable(p);
-                      const isFav = favorites.some((f) => f.id === favId);
-                      return (
-                        <div key={p.uid} className="cat-row track-row-compact">
-                          <button
-                            type="button"
-                            className="idx"
-                            onClick={() => player.playPlayable(p, ytHits)}
-                          >
-                            <span className="idx-num">{i + 1}</span>
-                            <span className="idx-play hover-only" aria-hidden>
-                              ▶
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className="cat-art-wrap"
-                            onClick={() => player.playPlayable(p, ytHits)}
-                          >
-                            {p.artworkUrl ? (
-                              <img className="cat-art" src={p.artworkUrl} alt="" loading="lazy" />
-                            ) : (
-                              <div className="cat-art ph">♪</div>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            className="cat-main"
-                            onClick={() => player.playPlayable(p, ytHits)}
-                          >
-                            <span className="cat-title">
-                              <span className="cat-title-text">{p.title}</span>
-                              <SourceBadge source="youtube" />
-                            </span>
-                            <span className="cat-sub">{p.artist}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`op ico-btn ${isFav ? 'hot' : ''}`}
-                            title="★"
-                            onClick={() => {
-                              setFavorites(
-                                toggleFavorite({
-                                  id: favId,
-                                  title: p.title,
-                                  artist: p.artist,
-                                  artworkUrl: p.artworkUrl,
-                                  source: 'youtube',
-                                  playable: p,
-                                })
-                              );
-                            }}
-                          >
-                            {isFav ? '★' : '☆'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              )}
-              {query.trim() && !tracks.length && !ytHits.length && (
-                <EmptyState title={t.youtube.noResults} />
+              {query.trim() && !tracks.length && (
+                <EmptyState title={t.common.empty} />
               )}
             </>
           )}
@@ -1921,7 +1873,7 @@ export default function App() {
             playlists.length ? (
               <LedgerPlaylists items={playlists} onOpen={(p) => void openPlaylist(p)} />
             ) : query.trim() ? (
-              <EmptyState title={t.youtube.noResults} />
+              <EmptyState title={t.common.empty} />
             ) : null
           )}
 
@@ -1929,7 +1881,7 @@ export default function App() {
             users.length ? (
               <LedgerUsers items={users} onOpen={(u) => void openUser(u)} />
             ) : query.trim() ? (
-              <EmptyState title={t.youtube.noResults} />
+              <EmptyState title={t.common.empty} />
             ) : null
           )}
 
@@ -1940,7 +1892,6 @@ export default function App() {
                 {favorites.length > 0 && (
                   <span className="note" style={{ margin: 0 }}>
                     {favorites.length}
-                    {ytFavorites.length ? ` · YT ${ytFavorites.length}` : ''}
                   </span>
                 )}
               </div>
@@ -2123,44 +2074,89 @@ export default function App() {
 
           {!loading && isLibraryPage && libraryView === 'sc-playlists' && (
             <section className="chapter">
+              {/* Own miura playlists (local / multi-source) */}
               <div className="chapter-h">
-                <h2>Твои плейлисты</h2>
-                <button
-                  type="button"
-                  className="btn-icon"
-                  title="Новый плейлист"
-                  aria-label="new playlist"
-                  onClick={() => {
-                    if (!isLoggedIn) {
-                      handleLogin();
-                      return;
-                    }
-                    setCreatePlTitle('');
-                    setCreatePlOpen(true);
-                  }}
-                >
-                  <Ico size={20}>
-                    <path d="M12 5v14M5 12h14" />
-                  </Ico>
-                </button>
+                <h2>{t.nav.playlists}</h2>
               </div>
-              <div className="chapter-h" style={{ marginBottom: 10 }}>
-                <h3 className="sc-sub">Созданные</h3>
-              </div>
-              {libraryPlaylists.length ? (
-                <LedgerPlaylists items={libraryPlaylists} onOpen={(p) => void openPlaylist(p)} />
-              ) : (
-                <p className="note" style={{ marginBottom: 20 }}>
-                  Нет созданных — нажми «+ Новый»
-                </p>
+
+              {railPlaylists.length > 0 && (
+                <>
+                  <div className="chapter-h" style={{ marginBottom: 10 }}>
+                    <h3 className="sc-sub">{t.playlists.title}</h3>
+                  </div>
+                  <div className="miura-pl-grid" style={{ marginBottom: 28 }}>
+                    {railPlaylists.map((pl) => {
+                      const cover = miuraPlaylistCover(pl);
+                      return (
+                        <button
+                          key={pl.id}
+                          type="button"
+                          className="miura-pl-card"
+                          onClick={() => openMiuraPlaylist(pl.id)}
+                        >
+                          <div className="miura-pl-card-art">
+                            {cover ? (
+                              <img src={cover} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                            ) : (
+                              <div className="miura-pl-card-ph">♪</div>
+                            )}
+                          </div>
+                          <div className="miura-pl-card-body">
+                            <span className="miura-pl-card-title">{pl.title}</span>
+                            <span className="miura-pl-card-desc">
+                              {pl.items?.length || 0} · miura
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
               )}
-              <div className="chapter-h" style={{ margin: '24px 0 10px' }}>
-                <h3 className="sc-sub">Лайкнутые плейлисты</h3>
-              </div>
-              {likedPlaylists.length ? (
-                <LedgerPlaylists items={likedPlaylists} onOpen={(p) => void openPlaylist(p)} />
+
+              {/* SoundCloud playlists when logged in */}
+              {isLoggedIn ? (
+                <>
+                  <div className="chapter-h" style={{ marginBottom: 10 }}>
+                    <h3 className="sc-sub">SoundCloud · созданные</h3>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      title="Новый плейлист SoundCloud"
+                      aria-label="new sc playlist"
+                      onClick={() => {
+                        setCreatePlTitle('');
+                        setCreatePlOpen(true);
+                      }}
+                    >
+                      <Ico size={20}>
+                        <path d="M12 5v14M5 12h14" />
+                      </Ico>
+                    </button>
+                  </div>
+                  {libraryPlaylists.length ? (
+                    <LedgerPlaylists items={libraryPlaylists} onOpen={(p) => void openPlaylist(p)} />
+                  ) : (
+                    <p className="note" style={{ marginBottom: 20 }}>
+                      Нет созданных на SoundCloud
+                    </p>
+                  )}
+                  <div className="chapter-h" style={{ margin: '24px 0 10px' }}>
+                    <h3 className="sc-sub">SoundCloud · лайкнутые</h3>
+                  </div>
+                  {likedPlaylists.length ? (
+                    <LedgerPlaylists items={likedPlaylists} onOpen={(p) => void openPlaylist(p)} />
+                  ) : (
+                    <p className="note">Пока нет лайкнутых плейлистов</p>
+                  )}
+                </>
               ) : (
-                <p className="note">Пока нет лайкнутых плейлистов</p>
+                <p className="note" style={{ marginTop: 8 }}>
+                  Войди в SoundCloud, чтобы видеть плейлисты SC ·{' '}
+                  <button type="button" className="linkish" onClick={() => handleLogin()}>
+                    {t.common.login}
+                  </button>
+                </p>
               )}
             </section>
           )}
@@ -2677,13 +2673,6 @@ export default function App() {
             />
           )}
 
-          {page === 'youtube' && (
-            <YouTubePage
-              currentUid={player.current ? getPlayable(player.current.id)?.uid : null}
-              onPlay={(item, list) => player.playPlayable(item, list)}
-            />
-          )}
-
           {page === 'soundcloud' && (
             <div className="chapter">
               <div className="sc-home-hero">
@@ -2742,8 +2731,10 @@ export default function App() {
               }}
             />
           )}
+          </div>
         </div>
       </main>
+      </div>
 
       <PlayerBar
         player={player}
@@ -2757,8 +2748,8 @@ export default function App() {
           if (!tr) return;
           const playable = getPlayable(tr.id);
           const source =
-            tr.genre === 'local' || tr.genre === 'youtube'
-              ? String(tr.genre)
+            tr.genre === 'local'
+              ? 'local'
               : playable?.source || 'soundcloud';
           const id = playable ? favIdFromPlayable(playable) : favIdFromTrack(tr);
           setFavorites(
@@ -2795,8 +2786,50 @@ export default function App() {
         onClear={() => player.clearQueue()}
       />
 
+      {createMiuraPlOpen && (
+        <Modal title={t.playlists.create} onClose={() => setCreateMiuraPlOpen(false)}>
+          <div className="modal-field">
+            <label>{t.playlists.name}</label>
+            <input
+              type="text"
+              value={createMiuraPlTitle}
+              onChange={(e) => setCreateMiuraPlTitle(e.target.value)}
+              placeholder={t.playlists.defaultName}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const pl = createMiuraPlaylist(createMiuraPlTitle.trim() || t.playlists.defaultName);
+                  refreshRailPlaylists();
+                  setCreateMiuraPlOpen(false);
+                  setCreateMiuraPlTitle('');
+                  openMiuraPlaylist(pl.id);
+                }
+              }}
+            />
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn" onClick={() => setCreateMiuraPlOpen(false)}>
+              {t.common.cancel}
+            </button>
+            <button
+              type="button"
+              className="btn solid"
+              onClick={() => {
+                const pl = createMiuraPlaylist(createMiuraPlTitle.trim() || t.playlists.defaultName);
+                refreshRailPlaylists();
+                setCreateMiuraPlOpen(false);
+                setCreateMiuraPlTitle('');
+                openMiuraPlaylist(pl.id);
+              }}
+            >
+              {t.common.save}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {createPlOpen && (
-        <Modal title="Новый плейлист" onClose={() => !createPlBusy && setCreatePlOpen(false)}>
+        <Modal title="Новый плейлист SoundCloud" onClose={() => !createPlBusy && setCreatePlOpen(false)}>
           <div className="modal-field">
             <label>Название</label>
             <input
@@ -3596,6 +3629,8 @@ function HomeShelf({
   );
 }
 
+const CAT_ROW_H = 64;
+
 function Catalog({
   tracks,
   currentId,
@@ -3631,16 +3666,15 @@ function Catalog({
       </div>
     );
   }
-  return (
-    <div className="cat">
-      {tracks.map((t, i) => {
+
+  const renderRow = (t: Track, i: number) => {
         const liked = likedIds.has(t.id) || t.user_favorite;
         const art = artworkUrl(t.artwork_url || t.user?.avatar_url, 't67x67');
         const isCurrent = currentId === t.id;
         const isPlaying = isCurrent && playbackState === 'playing';
         const isLoading = isCurrent && playbackState === 'loading';
         return (
-          <div key={`${t.id}-${i}`} className={`cat-row ${isCurrent ? 'live' : ''} ${isPlaying ? 'playing' : ''}`}>
+          <div className={`cat-row ${isCurrent ? 'live' : ''} ${isPlaying ? 'playing' : ''}`}>
             <button
               type="button"
               className={`idx ${isCurrent ? 'on' : ''}`}
@@ -3750,8 +3784,29 @@ function Catalog({
             </div>
           </div>
         );
-      })}
-    </div>
+  };
+
+  // Short lists: plain map (no nested scroll). Long lists: virtualize for smooth scroll.
+  if (tracks.length <= 48) {
+    return (
+      <div className="cat cat-smooth">
+        {tracks.map((t, i) => (
+          <React.Fragment key={`${t.id}-${i}`}>{renderRow(t, i)}</React.Fragment>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <VirtualList
+      className="cat cat-smooth cat-virtual"
+      items={tracks}
+      rowHeight={CAT_ROW_H}
+      maxHeight={Math.max(280, Math.min(window.innerHeight - 260, window.innerHeight * 0.72))}
+      overscan={10}
+      getKey={(t, i) => `${t.id}-${i}`}
+      renderRow={(t, i) => renderRow(t, i)}
+    />
   );
 }
 
@@ -4155,13 +4210,13 @@ function Settings({
                   >
                     <span
                       className="accent-opt-swatch"
-                      style={{ background: isAccentWhite(accent) ? '#c23a2b' : accent }}
+                      style={{ background: isAccentWhite(accent) ? '#c85a8e' : accent }}
                     />
                     <span>{t.settings.accentCustom}</span>
                     <input
                       className="accent-opt-input"
                       type="color"
-                      value={isAccentWhite(accent) ? '#c23a2b' : accent}
+                      value={isAccentWhite(accent) ? '#c85a8e' : accent}
                       onChange={(e) => {
                         const v = e.target.value.toLowerCase();
                         // never store pure #ffffff — map to soft white
@@ -4804,6 +4859,7 @@ function PlayerBar({
     current,
     state,
     progress,
+    getProgress,
     duration,
     volume,
     isMuted,
@@ -4822,8 +4878,27 @@ function PlayerBar({
     stationMode,
   } = player;
 
+  // Smooth seek UI at display refresh rate (PlayerBar only)
+  const [smoothProgress, setSmoothProgress] = useState(progress);
+  const [scrubbing, setScrubbing] = useState(false);
+  useEffect(() => {
+    if (scrubbing) return;
+    if (state !== 'playing') {
+      setSmoothProgress(typeof getProgress === 'function' ? getProgress() : progress);
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      setSmoothProgress(typeof getProgress === 'function' ? getProgress() : progress);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [state, current?.id, getProgress, progress, scrubbing]);
+
   const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
-  const pct = safeDuration ? (progress / safeDuration) * 100 : 0;
+  const displayProgress = smoothProgress;
+  const pct = safeDuration ? Math.min(100, Math.max(0, (displayProgress / safeDuration) * 100)) : 0;
   const liked = current ? likedIds.has(current.id) || current.user_favorite : false;
   const art = current
     ? artworkUrl(current.artwork_url || current.user?.avatar_url, 't67x67')
@@ -4842,37 +4917,32 @@ function PlayerBar({
     ? (() => {
         if (/таймаут|timeout/i.test(errText)) {
           return {
-            title: 'YouTube: таймаут',
-            detail: 'Проверь SOCKS «весь трафик» и нажми play ещё раз.',
+            title: 'Таймаут',
+            detail: 'Проверь сеть/прокси и нажми play ещё раз.',
           };
         }
         if (/формат|не открылся|не поддерживается/i.test(errText)) {
           return {
-            title: 'YouTube: поток не открылся',
+            title: 'Поток не открылся',
             detail: 'Попробуй ещё раз или другой трек.',
           };
         }
         if (/бот|LOGIN_REQUIRED|блокирует/i.test(errText)) {
           return {
-            title: 'YouTube: бот-проверка',
-            detail: 'Нужен живой прокси (весь трафик) и перезапуск miura.',
+            title: 'Доступ ограничен',
+            detail: 'Проверь прокси и перезапусти miura.',
           };
         }
         if (/сеть|прокси|403/i.test(errText)) {
           return {
-            title: 'YouTube: сеть',
-            detail: 'SOCKS не достучался до потока. Проверь VPN/прокси.',
-          };
-        }
-        if (/YouTube|ytPage|video id|SOCKS|реклам/i.test(errText)) {
-          const one = errText.replace(/\s+/g, ' ').trim();
-          return {
-            title: 'YouTube',
-            detail: one.length > 160 ? `${one.slice(0, 160)}…` : one,
+            title: 'Сеть',
+            detail: 'Не удалось достучаться до потока. Проверь VPN/прокси.',
           };
         }
         // One short line for the bar; full text in title tooltip
-        const one = errText.replace(/\s+/g, ' ').trim();
+        const one = errText
+          .replace(/\s+/g, ' ')
+          .trim();
         return {
           title: 'Ошибка воспроизведения',
           detail: one.length > 140 ? `${one.slice(0, 140)}…` : one || 'Неизвестная ошибка',
@@ -4886,7 +4956,7 @@ function PlayerBar({
       : current?.user?.username ?? '—';
 
   return (
-    <footer className={`bar ${state === 'playing' ? 'is-playing' : ''} ${errView ? 'has-error' : ''}`}>
+    <footer className={`bar bar-dock ${state === 'playing' ? 'is-playing' : ''} ${errView ? 'has-error' : ''}`}>
       {errView ? (
         <div className="bar-error-banner" role="alert" title={errText}>
           <div className="bar-error-title">{errView.title}</div>
@@ -4902,18 +4972,17 @@ function PlayerBar({
           <span className={`bar-art-ring ${state === 'playing' ? 'on' : ''}`}>{artNode}</span>
         )}
         <div className="bar-now-text">
-          {current && onOpenTrack ? (
-            <button type="button" className="tt btn-like" onClick={onOpenTrack} title="Открыть трек">
-              <span className="tt-text">{current.title}</span>
-              <SourceBadge track={current} />
-              {isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
-            </button>
-          ) : (
-            <div className="tt">
+          <div className="tt bar-now-title-row">
+            {current && onOpenTrack ? (
+              <button type="button" className="tt-text btn-like" onClick={onOpenTrack} title="Открыть трек">
+                {current.title}
+              </button>
+            ) : (
               <span className="tt-text">{current?.title ?? 'Ничего не играет'}</span>
-              {current && isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
-            </div>
-          )}
+            )}
+            {current ? <SourceBadge track={current} /> : null}
+            {current && isGoPlusOnlyTrack(current) ? <GoPlusBadge /> : null}
+          </div>
           {current?.user && onOpenUser ? (
             <button type="button" className="aa btn-like" onClick={onOpenUser}>
               {subline}
@@ -4998,15 +5067,26 @@ function PlayerBar({
           </button>
         </div>
         <div className="seek">
-          <span>{formatDuration(progress * 1000)}</span>
+          <span>{formatDuration(displayProgress * 1000)}</span>
           <input
             className="slider"
             type="range"
             min={0}
             max={safeDuration || 0}
-            step={0.1}
-            value={safeDuration ? Math.min(progress, safeDuration) : 0}
-            onChange={(e) => seek(Number(e.target.value))}
+            step={0.05}
+            value={safeDuration ? Math.min(displayProgress, safeDuration) : 0}
+            onPointerDown={() => setScrubbing(true)}
+            onPointerUp={(e) => {
+              const v = Number((e.target as HTMLInputElement).value);
+              setScrubbing(false);
+              seek(v);
+              setSmoothProgress(v);
+            }}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setSmoothProgress(v);
+              if (!scrubbing) seek(v);
+            }}
             disabled={!current}
             style={{
               background: `linear-gradient(to right, var(--accent) ${pct}%, var(--line-2) ${pct}%)`,
@@ -5054,13 +5134,19 @@ function PlayerBar({
           </button>
         )}
         {onOpenQueue && (
-          <button type="button" className="ico-btn" onClick={onOpenQueue} title="Очередь" aria-label="queue">
+          <button
+            type="button"
+            className="ico-btn bar-queue"
+            onClick={onOpenQueue}
+            title="Очередь"
+            aria-label="queue"
+          >
             <IconQueue />
           </button>
         )}
         <button
           type="button"
-          className={`ico-btn ${isMuted || volume === 0 ? 'mute-on' : ''}`}
+          className={`ico-btn bar-mute ${isMuted || volume === 0 ? 'mute-on' : ''}`}
           onClick={toggleMute}
           title={isMuted || volume === 0 ? 'Без звука (нажми — включить)' : 'Звук (нажми — выкл)'}
           aria-label={isMuted || volume === 0 ? 'muted' : 'volume'}
@@ -5069,7 +5155,7 @@ function PlayerBar({
           {isMuted || volume === 0 ? <IconMute /> : <IconVol />}
         </button>
         <input
-          className="slider vol"
+          className="slider vol bar-vol"
           type="range"
           min={0}
           max={1}

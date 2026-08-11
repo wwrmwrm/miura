@@ -2,7 +2,7 @@
   "name": "miura",
   "version": "1.0.1",
   "private": true,
-  "description": "miura — multi-source music player (local, SoundCloud)",
+  "description": "miura - multi-source music player (local, SoundCloud)",
   "author": "miura",
   "main": "electron/main.cjs",
   "type": "module",
@@ -85,8 +85,7 @@
     "hls.js": "^1.5.18",
     "music-metadata": "^11.13.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "youtubei.js": "^17.2.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

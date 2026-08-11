@@ -52,6 +52,11 @@ export function TitleBar({ subtitle }: { subtitle?: string }) {
           音
         </span>
         <span className="titlebar-name">miura</span>
+        {import.meta.env.DEV ? (
+          <span className="titlebar-dev" title="Development build">
+            DEV
+          </span>
+        ) : null}
         <span className="titlebar-sep" aria-hidden />
         <span className="titlebar-kicker">{subtitle || '音 の 余 白'}</span>
       </div>
