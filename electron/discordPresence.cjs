@@ -77,13 +77,13 @@ function truncate(str, max) {
  * Prefer compact square icon; length must stay ≤ ~256 chars.
  */
 // Unique path on each design change — Discord CDN caches forever by URL
-// Same mark as the desktop app icon (音 / sakura ink)
+// Circular badge (音 + pink ring) so Discord's circle crop doesn't clip a square icon
 const APP_ICON_URL =
-  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-app-icon-v3-256.png';
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-app-icon-v4-256.png';
 const APP_ICON_URL_SM =
-  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-app-icon-v3-128.png';
+  'https://raw.githubusercontent.com/wwrmwrm/miura/main/docs/discord-app-icon-v4-128.png';
 /** Bump when badge art changes so presence always re-sends assets */
-const APP_ICON_REV = 'app-v3';
+const APP_ICON_REV = 'app-v4-circle';
 
 /**
  * Discord accepts https image URLs (≤ ~256 chars) as large_image / small_image.
