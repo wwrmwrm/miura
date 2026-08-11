@@ -21,7 +21,7 @@ import {
   updatePlaylist,
   getStationTracks,
   getStoredClientId,
-  getThemeAccent,
+  BRAND_ACCENT,
   getUser,
   getUserPlaylists,
   getUserReposts,
@@ -107,6 +107,12 @@ import {
   playlistCover as miuraPlaylistCover,
   type MiuraPlaylist,
 } from './lib/miuraPlaylists';
+import {
+  loadRibbonPins,
+  pinToPlaylistStub,
+  toggleRibbonPin,
+  type RibbonScPin,
+} from './lib/miuraRibbonPins';
 import { resolveMusicUrl } from './lib/urlResolve';
 import { cacheGet, cacheSet } from './lib/searchCache';
 import { ProfileGate } from './components/ProfileGate';
@@ -123,14 +129,6 @@ import type {
   TrackComment,
 } from './types';
 import miuraMarkUrl from './assets/miura-mark.png';
-
-/** Soft white accent — not pure #ffffff (contrast / solid buttons). */
-const ACCENT_WHITE = '#f2f2f7';
-
-function isAccentWhite(hex: string): boolean {
-  const h = hex.toLowerCase();
-  return h === ACCENT_WHITE || h === '#ffffff' || h === '#fff' || h === '#f5f5f7' || h === '#f2f2f7';
-}
 
 /** SoundCloud-style home filter tabs */
 type HomeTab = 'all' | HomeGroup;
@@ -236,14 +234,15 @@ export default function App() {
   const [miuraProfile, setMiuraProfile] = useState<MiuraProfile | null>(null);
   const [miuraProfiles, setMiuraProfiles] = useState<MiuraProfile[]>([]);
   const [profileReady, setProfileReady] = useState(false);
-  /** Left-rail playlists (Yandex-style) */
+  /** Left-rail / top-ribbon local miura playlists */
   const [railPlaylists, setRailPlaylists] = useState<MiuraPlaylist[]>(() => loadMiuraPlaylists());
+  /** SC playlists pinned to the top ribbon */
+  const [ribbonPins, setRibbonPins] = useState<RibbonScPin[]>(() => loadRibbonPins());
   const [focusMiuraPlaylistId, setFocusMiuraPlaylistId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [clientIdInput, setClientIdInput] = useState(getStoredClientId() ?? '');
-  const [accent, setAccent] = useState(getThemeAccent());
   const [bootDone, setBootDone] = useState(false);
   /** SoundCloud session (optional connected service) */
   const isLoggedIn = Boolean(session?.accessToken && session?.user);
@@ -378,7 +377,15 @@ export default function App() {
 
   const refreshRailPlaylists = useCallback(() => {
     setRailPlaylists(loadMiuraPlaylists());
+    setRibbonPins(loadRibbonPins());
   }, []);
+
+  const togglePlaylistRibbonPin = useCallback((pl: Playlist) => {
+    const next = toggleRibbonPin(pl);
+    setRibbonPins(next);
+    const on = next.some((p) => p.id === String(pl.urn || pl.id));
+    setStatus(on ? t.playlists.pinToRibbon : t.playlists.unpinFromRibbon);
+  }, [t.playlists.pinToRibbon, t.playlists.unpinFromRibbon]);
 
   const openMiuraPlaylist = useCallback((id: string | null) => {
     setFocusMiuraPlaylistId(id);
@@ -395,16 +402,13 @@ export default function App() {
     setFavorites(loadFavorites());
     setRecent(loadRecent());
     setRailPlaylists(loadMiuraPlaylists());
-    // Optional profile accent
-    if (state.active?.accent) {
-      setAccent(state.active.accent);
-      setThemeAccent(state.active.accent);
-    }
+    setRibbonPins(loadRibbonPins());
+    setThemeAccent(BRAND_ACCENT);
   }, []);
 
   useEffect(() => {
-    setThemeAccent(accent);
-  }, [accent]);
+    setThemeAccent(BRAND_ACCENT);
+  }, []);
 
   const loadHome = useCallback(async () => {
     setLoading(true);
@@ -426,7 +430,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        setThemeAccent(accent);
+        setThemeAccent(BRAND_ACCENT);
         // Local miura profile first — gate UI until we know
         try {
           const ps = await getProfileState();
@@ -1524,22 +1528,22 @@ export default function App() {
         </div>
       </header>
 
-      {/* playlist ribbon under topbar */}
-      <div className="pl-ribbon" aria-label={t.nav.miuraPlaylists}>
-        <span className="pl-ribbon-label">{t.nav.miuraPlaylists}</span>
+      {/* playlist ribbon under topbar — local miura + pinned SC */}
+      <div className="pl-ribbon" aria-label={t.playlists.ribbonLabel || t.nav.miuraPlaylists}>
+        <span className="pl-ribbon-label">{t.playlists.ribbonLabel || t.nav.miuraPlaylists}</span>
         <div className="pl-ribbon-scroll">
-          {railPlaylists.length === 0 ? (
+          {railPlaylists.length === 0 && ribbonPins.length === 0 ? (
             <button type="button" className="pl-ribbon-empty" onClick={() => openMiuraPlaylist(null)}>
               + {t.playlists.create}
             </button>
           ) : (
             <>
-              {railPlaylists.slice(0, 24).map((pl) => {
+              {railPlaylists.slice(0, 16).map((pl) => {
                 const cover = miuraPlaylistCover(pl);
                 const on = page === 'miura-playlists' && focusMiuraPlaylistId === pl.id;
                 return (
                   <button
-                    key={pl.id}
+                    key={`m-${pl.id}`}
                     type="button"
                     className={`pl-ribbon-item ${on ? 'on' : ''}`}
                     title={pl.title}
@@ -1553,6 +1557,32 @@ export default function App() {
                       )}
                     </span>
                     <span className="pl-ribbon-name">{pl.title}</span>
+                  </button>
+                );
+              })}
+              {ribbonPins.slice(0, 16).map((pin) => {
+                const cover =
+                  (pin.artworkUrl && artworkUrl(pin.artworkUrl, 't67x67')) || pin.artworkUrl || '';
+                const activeKey = activePlaylist
+                  ? String(activePlaylist.urn || activePlaylist.id)
+                  : '';
+                const on = page === 'playlist' && activeKey === pin.id;
+                return (
+                  <button
+                    key={`sc-${pin.id}`}
+                    type="button"
+                    className={`pl-ribbon-item pl-ribbon-sc ${on ? 'on' : ''}`}
+                    title={pin.userName ? `${pin.title} · ${pin.userName}` : pin.title}
+                    onClick={() => void openPlaylist(pinToPlaylistStub(pin))}
+                  >
+                    <span className="pl-ribbon-art">
+                      {cover ? (
+                        <img src={cover} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span>♪</span>
+                      )}
+                    </span>
+                    <span className="pl-ribbon-name">{pin.title}</span>
                   </button>
                 );
               })}
@@ -2257,6 +2287,30 @@ export default function App() {
                         </button>
                       </>
                     )}
+                    <button
+                      type="button"
+                      className={`btn-icon ${
+                        ribbonPins.some(
+                          (p) => p.id === String(activePlaylist.urn || activePlaylist.id)
+                        )
+                          ? 'on'
+                          : ''
+                      }`}
+                      onClick={() => togglePlaylistRibbonPin(activePlaylist)}
+                      title={
+                        ribbonPins.some(
+                          (p) => p.id === String(activePlaylist.urn || activePlaylist.id)
+                        )
+                          ? t.playlists.unpinFromRibbon
+                          : t.playlists.pinToRibbon
+                      }
+                      aria-label="pin playlist to ribbon"
+                    >
+                      <Ico size={18}>
+                        {/* pin */}
+                        <path d="M12 2l1.2 4.2H17.5l-3.4 2.6 1.2 4.2L12 10.8 8.7 13l1.2-4.2L6.5 6.2h4.3L12 2z" />
+                      </Ico>
+                    </button>
                     {!activePlaylist.is_system && (
                       <button
                         type="button"
@@ -2279,8 +2333,9 @@ export default function App() {
                       >
                         <IconHeart
                           filled={
-                            likedPlaylistIds.has(String(activePlaylist.urn || activePlaylist.id)) ||
-                            Boolean(activePlaylist.user_like || activePlaylist.liked)
+                            likedPlaylistIds.has(
+                              String(activePlaylist.urn || activePlaylist.id)
+                            ) || Boolean(activePlaylist.user_like || activePlaylist.liked)
                           }
                           size={20}
                         />
@@ -2664,12 +2719,6 @@ export default function App() {
                   })
                 );
               }}
-              onAccentChange={(hex) => {
-                if (hex) {
-                  setAccent(hex);
-                  setThemeAccent(hex);
-                }
-              }}
             />
           )}
 
@@ -2703,8 +2752,6 @@ export default function App() {
               onMiuraProfileState={applyMiuraProfileState}
               clientIdInput={clientIdInput}
               setClientIdInput={setClientIdInput}
-              accent={accent}
-              setAccent={setAccent}
               onLogin={handleLogin}
               onLogout={() => void handleLogout()}
               onSession={(s) => {
@@ -3876,8 +3923,6 @@ function Settings({
   onMiuraProfileState,
   clientIdInput,
   setClientIdInput,
-  accent,
-  setAccent,
   onLogin,
   onLogout,
   onSession,
@@ -3890,8 +3935,6 @@ function Settings({
   onMiuraProfileState: (s: MiuraProfileState) => void;
   clientIdInput: string;
   setClientIdInput: (v: string) => void;
-  accent: string;
-  setAccent: (v: string) => void;
   onLogin: (mode?: 'app' | 'browser') => void;
   onLogout: () => void;
   onSession: (s: AuthSession) => void;
@@ -4160,7 +4203,7 @@ function Settings({
                       >
                         <span className="theme-mock" style={{ background: mock.deep }} aria-hidden>
                           <span className="theme-mock-side" style={{ background: mock.side }}>
-                            <span className="theme-mock-dot" style={{ background: accent }} />
+                            <span className="theme-mock-dot" style={{ background: BRAND_ACCENT }} />
                             <span className="theme-mock-line" style={{ background: mock.muted, opacity: 0.45 }} />
                             <span className="theme-mock-line" style={{ background: mock.muted, opacity: 0.3, width: '70%' }} />
                             <span className="theme-mock-line" style={{ background: mock.muted, opacity: 0.25, width: '55%' }} />
@@ -4175,9 +4218,9 @@ function Settings({
                               <span style={{ background: mock.card, border: id === 'white' ? '1px solid rgba(0,0,0,0.08)' : 'none' }} />
                             </span>
                             <span className="theme-mock-bar" style={{ background: mock.bar }}>
-                              <span className="theme-mock-play" style={{ background: accent }} />
+                              <span className="theme-mock-play" style={{ background: BRAND_ACCENT }} />
                               <span className="theme-mock-prog" style={{ background: mock.muted, opacity: 0.35 }}>
-                                <span style={{ background: accent, width: '40%' }} />
+                                <span style={{ background: BRAND_ACCENT, width: '40%' }} />
                               </span>
                             </span>
                           </span>
@@ -4187,46 +4230,6 @@ function Settings({
                       </button>
                     );
                   })}
-                </div>
-              </section>
-
-              <section className="settings-card">
-                <h2>{t.settings.accent}</h2>
-                <p className="settings-desc">{t.settings.accentHint}</p>
-                <div className="accent-picker">
-                  <button
-                    type="button"
-                    className={`accent-opt ${isAccentWhite(accent) ? 'on' : ''}`}
-                    onClick={() => {
-                      setAccent(ACCENT_WHITE);
-                      setThemeAccent(ACCENT_WHITE);
-                    }}
-                  >
-                    <span className="accent-opt-swatch accent-opt-swatch-white" />
-                    <span>{t.settings.accentWhite}</span>
-                  </button>
-                  <label
-                    className={`accent-opt ${!isAccentWhite(accent) ? 'on' : ''}`}
-                  >
-                    <span
-                      className="accent-opt-swatch"
-                      style={{ background: isAccentWhite(accent) ? '#c85a8e' : accent }}
-                    />
-                    <span>{t.settings.accentCustom}</span>
-                    <input
-                      className="accent-opt-input"
-                      type="color"
-                      value={isAccentWhite(accent) ? '#c85a8e' : accent}
-                      onChange={(e) => {
-                        const v = e.target.value.toLowerCase();
-                        // never store pure #ffffff — map to soft white
-                        const next = v === '#ffffff' || v === '#fff' ? ACCENT_WHITE : v;
-                        setAccent(next);
-                        setThemeAccent(next);
-                      }}
-                    />
-                  </label>
-                  {!isAccentWhite(accent) && <span className="hex">{accent}</span>}
                 </div>
               </section>
             </>

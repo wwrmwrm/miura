@@ -14,6 +14,8 @@ import type {
 const API = 'https://api-v2.soundcloud.com';
 const CLIENT_ID_KEY = 'sc_client_id';
 const THEME_KEY = 'sc_theme_accent';
+/** Fixed brand accent — sakura ink (not user-customizable). */
+export const BRAND_ACCENT = '#c85a8e';
 
 let clientId: string | null = localStorage.getItem(CLIENT_ID_KEY);
 let accessToken: string | null = null;
@@ -199,30 +201,7 @@ export async function ensureAccessToken(): Promise<string> {
 }
 
 export function getThemeAccent(): string {
-  const stored = localStorage.getItem(THEME_KEY);
-  // migrate previous defaults → sakura ink (rose-magenta)
-  if (
-    !stored ||
-    stored === '#c8f06c' ||
-    stored === '#6c8cff' ||
-    stored === '#ff5500' ||
-    stored === '#ff5a3c' ||
-    stored === '#fc3c44' ||
-    stored === '#c23a2b' ||
-    stored === '#c45c3e' ||
-    stored === '#b54a32' ||
-    stored === '#e01111' ||
-    stored === '#ff2a2a' ||
-    stored === '#8b7cf6' ||
-    stored === '#a596ff' ||
-    stored === '#6b5fd4' ||
-    stored === '#7a6ee0' ||
-    stored === '#7a72c8' ||
-    stored === '#e8a070'
-  ) {
-    return '#c85a8e';
-  }
-  return stored;
+  return BRAND_ACCENT;
 }
 
 /** Text/icon color on solid accent surfaces (black on light yellow/white, white on red/purple). */
@@ -241,8 +220,14 @@ function contrastOnAccent(hex: string): string {
   }
 }
 
-export function setThemeAccent(color: string) {
-  localStorage.setItem(THEME_KEY, color);
+/** Apply brand accent CSS vars. Argument ignored — brand color is fixed. */
+export function setThemeAccent(_color?: string) {
+  const color = BRAND_ACCENT;
+  try {
+    localStorage.setItem(THEME_KEY, color);
+  } catch {
+    /* ignore */
+  }
   const hover = lighten(color, 14);
   const ink = contrastOnAccent(color);
   document.documentElement.style.setProperty('--accent', color);

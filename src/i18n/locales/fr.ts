@@ -58,7 +58,10 @@ export const fr: Dict = {
  "error": "Erreur de recherche",
  "reresolve": "Relancer la recherche des sources",
  "reresolveHint": "RГ©soudre Г  nouveau tous les titres (— Г  la place dвЂ™anciens aperГ§us SC). SoundCloud dГ©sactivГ© par dГ©faut.",
- "reresolveStarted": "Nouvelle recherche de {n} titresвЂ¦"
+ "reresolveStarted": "Nouvelle recherche de {n} titresвЂ¦",
+ "pinToRibbon": "Épingler en haut",
+ "unpinFromRibbon": "Retirer de la barre",
+ "ribbonLabel": "Playlists"
  },
  "common": {
  "play": "Lecture",

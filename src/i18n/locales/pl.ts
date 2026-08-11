@@ -58,7 +58,10 @@ export const pl: Dict = {
  "error": "BЕ‚Д…d wyszukiwania",
  "reresolve": "Ponowne wyszukanie ЕєrГіdeЕ‚",
  "reresolveHint": "Ponownie rozwiД…Еј wszystkie utwory (— zamiast starych podglД…dГіw SC). SoundCloud domyЕ›lnie wyЕ‚Д…czony.",
- "reresolveStarted": "Ponowne wyszukiwanie {n} utworГіwвЂ¦"
+ "reresolveStarted": "Ponowne wyszukiwanie {n} utworГіwвЂ¦",
+ "pinToRibbon": "Przypnij u góry",
+ "unpinFromRibbon": "Odepnij z paska",
+ "ribbonLabel": "Playlisty"
  },
  "common": {
  "play": "OdtwГіrz",

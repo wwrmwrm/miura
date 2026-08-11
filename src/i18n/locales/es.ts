@@ -58,7 +58,10 @@ export const es: Dict = {
  "error": "Error de bГєsqueda",
  "reresolve": "Volver a buscar fuentes",
  "reresolveHint": "Resolver todas las pistas de nuevo (local y SC). SoundCloud desactivado por defecto.",
- "reresolveStarted": "Volviendo a buscar {n} pistasвЂ¦"
+ "reresolveStarted": "Volviendo a buscar {n} pistasвЂ¦",
+ "pinToRibbon": "Fijar arriba",
+ "unpinFromRibbon": "Quitar de la barra",
+ "ribbonLabel": "Playlists"
  },
  "common": {
  "play": "Reproducir",

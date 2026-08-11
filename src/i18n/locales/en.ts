@@ -61,6 +61,9 @@ export const en: Dict = {
  reresolveHint:
  'Resolve all tracks again (local and SC). SoundCloud is off by default.',
  reresolveStarted: 'Re-searching {n} tracks…',
+ pinToRibbon: 'Pin to top bar',
+ unpinFromRibbon: 'Unpin from top bar',
+ ribbonLabel: 'Playlists',
  },
  common: {
  play: 'Play',

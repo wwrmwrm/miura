@@ -58,7 +58,10 @@ export const nl: Dict = {
  "error": "Zoekfout",
  "reresolve": "Bronnen opnieuw zoeken",
  "reresolveHint": "Alle nummers opnieuw oplossen (lokaal en SC). SoundCloud standaard uit.",
- "reresolveStarted": "{n} nummers opnieuw zoekenвЂ¦"
+ "reresolveStarted": "{n} nummers opnieuw zoekenвЂ¦",
+ "pinToRibbon": "Vastmaken boven",
+ "unpinFromRibbon": "Losmaken van balk",
+ "ribbonLabel": "Playlists"
  },
  "common": {
  "play": "Afspelen",

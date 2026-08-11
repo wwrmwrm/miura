@@ -58,7 +58,10 @@ export const pt: Dict = {
  "error": "Erro de pesquisa",
  "reresolve": "Voltar a pesquisar fontes",
  "reresolveHint": "Resolver todas as faixas de novo (— em vez de prГ©-visualizaГ§Гµes SC antigas). SoundCloud desligado por predefiniГ§ГЈo.",
- "reresolveStarted": "A voltar a procurar {n} faixasвЂ¦"
+ "reresolveStarted": "A voltar a procurar {n} faixasвЂ¦",
+ "pinToRibbon": "Fixar no topo",
+ "unpinFromRibbon": "Remover da barra",
+ "ribbonLabel": "Playlists"
  },
  "common": {
  "play": "Reproduzir",

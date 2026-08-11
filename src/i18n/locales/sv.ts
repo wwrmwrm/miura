@@ -58,7 +58,10 @@ export const sv: Dict = {
  "error": "SГ¶kfel",
  "reresolve": "SГ¶k om kГ¤llor",
  "reresolveHint": "LГ¶s alla spГҐr igen (— i stГ¤llet fГ¶r gamla SC-fГ¶rhandsvisningar). SoundCloud av som standard.",
- "reresolveStarted": "SГ¶ker om {n} spГҐrвЂ¦"
+ "reresolveStarted": "SГ¶ker om {n} spГҐrвЂ¦",
+ "pinToRibbon": "Fäst högst upp",
+ "unpinFromRibbon": "Ta bort från listen",
+ "ribbonLabel": "Spellistor"
  },
  "common": {
  "play": "Spela",

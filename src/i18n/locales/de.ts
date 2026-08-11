@@ -58,7 +58,10 @@ export const de: Dict = {
  "error": "Suchfehler",
  "reresolve": "Quellen neu suchen",
  "reresolveHint": "Alle Tracks erneut suchen (lokal und SC). SoundCloud standardmГ¤Гџig aus.",
- "reresolveStarted": "Suche {n} Tracks erneutвЂ¦"
+ "reresolveStarted": "Suche {n} Tracks erneutвЂ¦",
+ "pinToRibbon": "Zur Leiste",
+ "unpinFromRibbon": "Von Leiste entfernen",
+ "ribbonLabel": "Playlists"
  },
  "common": {
  "play": "Abspielen",

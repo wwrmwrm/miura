@@ -59,6 +59,9 @@ export const ru = {
  reresolveHint:
  'Заново найти все треки (локальные и SC). SoundCloud по умолчанию выключен.',
  reresolveStarted: 'Переискиваю {n} треков…',
+ pinToRibbon: 'В верхнюю строку',
+ unpinFromRibbon: 'Убрать из верхней строки',
+ ribbonLabel: 'Плейлисты',
  },
  common: {
  play: 'Играть',

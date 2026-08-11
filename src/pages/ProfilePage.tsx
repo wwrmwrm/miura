@@ -32,7 +32,6 @@ type Props = {
   onOpenFavorites: () => void;
   onPlayFavorite?: (f: FavItem) => void;
   onToggleFavorite?: (f: FavItem) => void;
-  onAccentChange?: (hex: string | null) => void;
 };
 
 export function ProfilePage({
@@ -48,7 +47,6 @@ export function ProfilePage({
   onOpenFavorites,
   onPlayFavorite,
   onToggleFavorite,
-  onAccentChange,
 }: Props) {
   const t = useT();
   const { locale } = useI18n();
@@ -56,7 +54,6 @@ export function ProfilePage({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.displayName);
   const [bio, setBio] = useState(profile.bio || '');
-  const [accent, setAccent] = useState(profile.accent || '');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [localCount, setLocalCount] = useState(0);
@@ -74,10 +71,9 @@ export function ProfilePage({
   useEffect(() => {
     setName(profile.displayName);
     setBio(profile.bio || '');
-    setAccent(profile.accent || '');
     setEditing(false);
     setMsg(null);
-  }, [profile.id, profile.displayName, profile.bio, profile.accent]);
+  }, [profile.id, profile.displayName, profile.bio]);
 
   useEffect(() => {
     setLocalCount(loadLocalLibrary().length);
@@ -117,10 +113,9 @@ export function ProfilePage({
         id: profile.id,
         displayName,
         bio: bio.trim().slice(0, 160),
-        accent: accent.trim() || null,
+        accent: null,
       });
       onProfileState(state);
-      onAccentChange?.(accent.trim() || null);
       setEditing(false);
       setMsg(t.profile.saved);
     } catch (e) {
@@ -232,11 +227,7 @@ export function ProfilePage({
                 backgroundImage: `url(${profile.bannerUrl})`,
                 backgroundPosition: `${bannerPosX}% ${bannerPosY}%`,
               }
-            : profile.accent
-              ? {
-                  background: `linear-gradient(120deg, ${profile.accent} 0%, color-mix(in srgb, ${profile.accent} 40%, #1a1a1a) 100%)`,
-                }
-              : undefined
+            : undefined
         }
       >
         <div className="sc-profile-banner-shade" />
@@ -362,21 +353,6 @@ export function ProfilePage({
             disabled={busy}
           />
           <p className="note">{bio.length}/160</p>
-          <label className="settings-field-label" htmlFor="pf-accent">
-            {t.profile.accent}
-          </label>
-          <div className="miura-profile-accent-row">
-            <input
-              id="pf-accent"
-              type="color"
-              value={accent && /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : '#c85a8e'}
-              onChange={(e) => setAccent(e.target.value)}
-              disabled={busy}
-            />
-            <button type="button" className="btn" disabled={busy} onClick={() => setAccent('')}>
-              {t.profile.accentDefault}
-            </button>
-          </div>
           <div className="row-btns" style={{ marginTop: 14 }}>
             <button type="button" className="btn solid" disabled={busy || !name.trim()} onClick={() => void save()}>
               {t.profile.save}

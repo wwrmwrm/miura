@@ -451,6 +451,11 @@
   color: var(--ink);
 }
 
+/* SC pin in ribbon — slight accent tint so it reads as “saved” */
+.pl-ribbon-item.pl-ribbon-sc {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+
 .pl-ribbon-art {
   width: 28px;
   height: 28px;
